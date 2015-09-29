@@ -1,0 +1,22 @@
+# example compile without fuse: make WITHOUT_FUSE=1
+
+SRC := $(shell find src -name '*.cpp')
+OBJ := $(patsubst src/%.cpp,obj/%.o,$(SRC))
+CPPFLAGS := -ggdb3 -std=c++11 -Wall -pedantic -MMD -DBOOST_ALL_DYN_LINK
+LDFLAGS := -pthread -lboost_log -lboost_program_options -lboost_thread -lboost_system
+
+ifndef WITHOUT_FUSE
+    CPPFLAGS := $(CPPFLAGS) -DHAS_FUSE $(shell pkg-config fuse --cflags) -DFUSE_USE_VERSION=29
+    LDFLAGS := $(LDFLAGS) $(shell pkg-config fuse --libs)
+endif
+
+TARGET := springy
+
+$(TARGET): $(OBJ)
+	$(CXX) $(CPPFLAGS) $(OBJ) $(LDFLAGS) -o $@
+
+obj/%.o: src/%.cpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ -c $<
+
+clean:
+	rm obj/*.o

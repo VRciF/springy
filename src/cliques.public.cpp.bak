@@ -1,0 +1,5 @@
+#include "cliques.hpp"
+
+CliqueLocal& Cliques::getCliqueLocal(){
+    return this->cliquelocal;
+}

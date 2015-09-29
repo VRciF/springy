@@ -1,0 +1,3 @@
+#include "globals.hpp"
+
+const boost::uuids::uuid Globals::identifier = boost::uuids::random_generator()();
