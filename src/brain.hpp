@@ -8,38 +8,44 @@
 #include <boost/asio/io_service.hpp>
 #include <boost/asio/signal_set.hpp>
 
+#include <boost/optional.hpp>
+
+#include <iostream>
+#include <fuse.h>
+
 namespace po = boost::program_options;
 
-class Brain{
-    public:
-        static int exitStatus;
-        
-        static Brain& instance();
-        ~Brain();
+namespace Springy{
+    class Brain{
+        public:
+            static boost::optional<int> exitStatus;
 
-        Brain& init();
-        Brain& setUp(int argc, char *argv[]);
-        Brain& run();
-        Brain& tearDown();
-        
-        static void handler(boost::asio::signal_set& this_, boost::system::error_code error, int signal_number){
-            
-        }
+            static Brain& instance();
+            ~Brain();
 
-    protected:
-        boost::asio::io_service io_service;
-        boost::asio::io_service::work preventIOServiceFromExitWorker;
+            Brain& init();
+            Brain& setUp(int argc, char *argv[]);
+            Brain& run();
+            Brain& tearDown();
 
-        boost::uuids::uuid instanceUUID;
-        boost::asio::signal_set signals;
-        po::options_description desc;
+            static void signalHandler(boost::system::error_code error, int signal_number);
+            void printHelp(std::ostream & output);
 
-        bool showusage;
+        protected:
+            boost::asio::io_service io_service;
+            boost::asio::io_service::work preventIOServiceFromExitWorker;
 
-        Brain();
-        
-        struct fuse_operations& getFuseOperations();
-        void usage();
-};
+            boost::uuids::uuid instanceUUID;
+            boost::asio::signal_set signals;
 
+            po::positional_options_description m_positional;
+            po::options_description visibleDesc;
+            po::options_description hiddenDesc;
+
+            bool showusage;
+
+            Brain();
+            struct ::fuse_operations& getFuseOperations();
+    };
+}
 #endif
