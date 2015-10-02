@@ -48,14 +48,13 @@ License along with this library.
 
 #if __cplusplus > 199711L
 #include <unordered_map>
-#include <mutex>
 #include <condition_variable>
 #include <thread>
 #include <chrono>
 #else
 #include <map>
-#include <pthread.h>
 #endif
+#include <pthread.h>
 #include <iostream>
 #include <stdexcept>
 #include <typeinfo>
@@ -63,8 +62,15 @@ License along with this library.
 #include <errno.h>
 
 class Synchronized{
+    public:
+        enum LOCK{ LOCK_READ, LOCK_WRITE };
+
     protected:
+        LOCK ltype;
+
         typedef struct metaMutex{
+            pthread_rwlock_t rwlock;
+            
 #if __cplusplus > 199711L
             std::unique_lock<std::mutex> ulock;
             std::mutex lock;
@@ -72,7 +78,6 @@ class Synchronized{
 #else
             pthread_mutex_t lock;
             pthread_cond_t cond;
-            pthread_t lockOwner;
 #endif
 
             int counter;
@@ -110,15 +115,15 @@ class Synchronized{
         template<typename T>
         T * getAccessPtr(T * obj) { return obj; } //obj is already pointer, return it!
 
-    public:
+public:
         template<typename T>
-        Synchronized(const T &ptr, bool lockit=true) : accessPtr(getAccessPtr(ptr)){
+        Synchronized(const T &ptr, LOCK ltype = LOCK_WRITE) : accessPtr(getAccessPtr(ptr)){
             //std::cout << "type: " << typeid(ptr).name() << std::endl;
 
             if(this->accessPtr==NULL){
                 throw std::runtime_error(std::string("Synchronizing on NULL pointer is not valid, referenced type is: ")+typeid(ptr).name());
             }
-
+            this->ltype = ltype;
 
 #if __cplusplus > 199711L
             {
@@ -139,10 +144,6 @@ class Synchronized{
                 }
 
             }
-
-            if(lockit){
-                this->metaPtr->ulock.lock();
-            }
             
 #else
             pthread_mutex_lock(&this->getMutex());
@@ -156,6 +157,7 @@ class Synchronized{
             }
             else{
                 this->metaPtr = new metaMutex();
+                pthread_rwlock_init(&this->metaPtr->rwlock, NULL);
                 pthread_mutex_init(&this->metaPtr->lock, NULL);
                 pthread_cond_init(&this->metaPtr->cond, NULL);
                 this->metaPtr->counter = 1;
@@ -163,12 +165,13 @@ class Synchronized{
             }
 
             pthread_mutex_unlock(&this->getMutex());
-
-            if(lockit){
-                pthread_mutex_lock(&this->metaPtr->lock);
-                this->metaPtr->lockOwner = pthread_self();
-            }
 #endif
+            if(this->ltype == LOCK_WRITE){
+                pthread_rwlock_wrlock(&this->metaPtr->rwlock);
+            }
+            else{
+                pthread_rwlock_rdlock(&this->metaPtr->rwlock);
+            }
         }
 
         operator int() { return 1; }
@@ -179,12 +182,16 @@ class Synchronized{
         ~Synchronized(){
 #if __cplusplus > 199711L
             this->metaPtr->ulock.unlock();
-            {
-                std::lock_guard<std::mutex> lockMapMutex(this->getMutex());
 #else
             pthread_mutex_unlock(&this->metaPtr->lock);
+#endif
 
-            pthread_mutex_lock(&this->getMutex());
+            pthread_rwlock_unlock(&this->metaPtr->rwlock);
+            {
+#if __cplusplus > 199711L
+                std::lock_guard<std::mutex> lockMapMutex(this->getMutex());
+#else
+                pthread_mutex_lock(&this->getMutex());
 #endif
                 metaPtr->counter--;
                 if(metaPtr->counter<=0){
@@ -206,7 +213,10 @@ class Synchronized{
 #endif
 
         void wait(unsigned long milliseconds=0, unsigned int nanos=0){
+            pthread_rwlock_unlock(&this->metaPtr->rwlock);
 #if __cplusplus > 199711L
+            this->metaPtr->lock.lock();
+            
             if(milliseconds==0 && nanos==0){
                 this->metaPtr->cond.wait(this->metaPtr->ulock);
             }
@@ -214,11 +224,9 @@ class Synchronized{
                 this->metaPtr->cond.wait_for(this->metaPtr->ulock, std::chrono::milliseconds(milliseconds) + std::chrono::nanoseconds(nanos));
             }
             
+            this->metaPtr->lock.unlock();
 #else
-            if(pthread_equal(pthread_self(), this->metaPtr->lockOwner)==0){
-                throw std::runtime_error(std::string("trying to wait is only allowed in the same thread holding the mutex"));
-            }
-
+            pthread_mutex_lock(&this->metaPtr->lock);
             int rval = 0;
             if(milliseconds == 0 && nanos == 0){
                 rval = pthread_cond_wait(&this->metaPtr->cond, &this->metaPtr->lock);
@@ -240,14 +248,19 @@ class Synchronized{
                 timeUntilToWait.tv_nsec = (now.tv_usec+1000UL*milliseconds)*1000UL + nanos;
                 rval = pthread_cond_timedwait(&this->metaPtr->cond, &this->metaPtr->lock, &timeUntilToWait);
             }
+            pthread_mutex_unlock(&this->metaPtr->lock);
             switch(rval){
-                case 0:
-                    this->metaPtr->lockOwner = pthread_self();
-                    break;
+                case 0: break;
                 case EINVAL: throw std::runtime_error("invalid time or condition or mutex given");
                 case EPERM: throw std::runtime_error("trying to wait is only allowed in the same thread holding the mutex");
             }
 #endif
+            if(this->ltype == LOCK_WRITE){
+                pthread_rwlock_wrlock(&this->metaPtr->rwlock);
+            }
+            else{
+                pthread_rwlock_rdlock(&this->metaPtr->rwlock);
+            }
         }
         void notify(){
 #if __cplusplus > 199711L
