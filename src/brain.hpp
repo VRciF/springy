@@ -13,6 +13,9 @@
 #include <iostream>
 #include <fuse.h>
 
+#include "fuse.hpp"
+#include "settings.hpp"
+
 namespace po = boost::program_options;
 
 namespace Springy{
@@ -42,10 +45,13 @@ namespace Springy{
             po::options_description visibleDesc;
             po::options_description hiddenDesc;
 
+            Settings config;
+            Fuse fuse;
+
             bool showusage;
+            
 
             Brain();
-            struct ::fuse_operations& getFuseOperations();
     };
 }
 #endif

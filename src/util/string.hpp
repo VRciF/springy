@@ -5,10 +5,10 @@ namespace Springy{
     namespace Util{
         class String{
             public:
-                static std::string urldecode(const std::string src){
+                static std::string urldecode(const std::string &src){
                     std::string dst;
                     char a, b, ch;
-                    for(int i=0;i<src.length();i++) {
+                    for(unsigned int i=0;i<src.length();i++) {
                             if ((src[i] == '%') && (src.length()-i)>=2 &&
                                 ((a = src[i+1]) && (b = src[i+2])) &&
                                 (isxdigit(a) && isxdigit(b))) {

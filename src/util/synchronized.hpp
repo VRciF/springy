@@ -63,10 +63,10 @@ License along with this library.
 
 class Synchronized{
     public:
-        enum LOCK{ LOCK_READ, LOCK_WRITE };
+        enum LockType{ READ, WRITE };
 
     protected:
-        LOCK ltype;
+        LockType ltype;
 
         typedef struct metaMutex{
             pthread_rwlock_t rwlock;
@@ -117,7 +117,7 @@ class Synchronized{
 
 public:
         template<typename T>
-        Synchronized(const T &ptr, LOCK ltype = LOCK_WRITE) : accessPtr(getAccessPtr(ptr)){
+        Synchronized(const T &ptr, LockType ltype = LockType::WRITE) : accessPtr(getAccessPtr(ptr)){
             //std::cout << "type: " << typeid(ptr).name() << std::endl;
 
             if(this->accessPtr==NULL){
@@ -166,7 +166,7 @@ public:
 
             pthread_mutex_unlock(&this->getMutex());
 #endif
-            if(this->ltype == LOCK_WRITE){
+            if(this->ltype == LockType::WRITE){
                 pthread_rwlock_wrlock(&this->metaPtr->rwlock);
             }
             else{
@@ -255,7 +255,7 @@ public:
                 case EPERM: throw std::runtime_error("trying to wait is only allowed in the same thread holding the mutex");
             }
 #endif
-            if(this->ltype == LOCK_WRITE){
+            if(this->ltype == LockType::WRITE){
                 pthread_rwlock_wrlock(&this->metaPtr->rwlock);
             }
             else{

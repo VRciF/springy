@@ -1,5 +1,10 @@
 #include "brain.hpp"
 
+#include "util/string.hpp"
+#include "util/file.hpp"
+
+#include <sys/mount.h>
+
 #include <boost/log/core.hpp>
 #include <boost/log/trivial.hpp>
 #include <boost/log/expressions.hpp>
@@ -37,48 +42,14 @@ namespace Springy{
         ;
         this->m_positional.add("input", -1);
 
-    /*
-            mhdd = new mhdd_config;
+        try{
+            this->fuse.init(&this->config);
+        }catch(std::runtime_error &e){
+            std::cerr << e.what() << std::endl;
+            this->exitStatus = -1;
+            return *this;
+        }
 
-            struct sigaction act;
-            int multithreaded=0;
-            char *mountpoint=NULL;
-            int res;
-
-            fops.getattr    	= mhdd_stat;
-            fops.statfs     	= mhdd_statfs;
-            fops.readdir    	= mhdd_readdir;
-            fops.readlink   	= mhdd_readlink;
-            fops.open       	= mhdd_fileopen;
-            fops.release    	= mhdd_release;
-            fops.read       	= mhdd_read;
-            fops.write      	= mhdd_write;
-            fops.create     	= mhdd_create;
-            fops.truncate   	= mhdd_truncate;
-            fops.ftruncate  	= mhdd_ftruncate;
-            fops.access     	= mhdd_access;
-            fops.mkdir      	= mhdd_mkdir;
-            fops.rmdir      	= mhdd_rmdir;
-            fops.unlink     	= mhdd_unlink;
-            fops.rename     	= mhdd_rename;
-            fops.utimens    	= mhdd_utimens;
-            fops.chmod      	= mhdd_chmod;
-            fops.chown      	= mhdd_chown;
-            fops.symlink    	= mhdd_symlink;
-            fops.mknod      	= mhdd_mknod;
-            fops.fsync      	= mhdd_fsync;
-            fops.link		    = mhdd_link;
-        #ifndef WITHOUT_XATTR
-                fops.setxattr   	= mhdd_setxattr;
-                fops.getxattr   	= mhdd_getxattr;
-                fops.listxattr  	= mhdd_listxattr;
-                fops.removexattr	= mhdd_removexattr;
-        #endif
-            fops.init		    = mhdd_init;
-            fops.destroy		= mhdd_destroy;
-
-            mhdd_debug_init();
-    */
         return *this;
     }
     Brain& Brain::setUp(int argc, char *argv[]){
@@ -104,19 +75,83 @@ namespace Springy{
 
             std::vector<std::string> opts = vm["input"].as<std::vector<std::string> >();
             if(opts.size()!=0){
-                if(opts.size()!=2){
-                    throw std::runtime_error("there must be either no mount points and volume directories OR both");
+                std::string mountpoint;
+                std::set<std::string> directories;
+
+                switch(opts.size()){
+                    case 0:
+                        throw std::runtime_error("there must be either one mount points and volume directories OR just a mount point");
+                    default:
+                        {
+                            mountpoint = Util::File::realpath(opts[opts.size()-1]);
+                            for(unsigned int i=0;i<opts.size()-1;i++){
+                                std::string file = opts[i];
+                                std::vector<std::string> tmpdirs;
+                                try{
+                                    file = Util::File::realpath(file);
+                                    tmpdirs.push_back(file);
+                                }catch(...){
+                                    boost::split( tmpdirs, opts[0], boost::is_any_of(","), boost::token_compress_on );
+                                }
+
+                                for(unsigned int i=0;i<tmpdirs.size();i++){
+                                    std::string directory = Util::File::realpath(Util::String::urldecode(tmpdirs[i]));
+                                    
+                                    if(directory.find(mountpoint)!=std::string::npos){
+                                        throw std::runtime_error(std::string("directory within mountpoint not allowed: ")+directory);
+                                    }
+
+                                    directories.insert(directory);
+                                }
+                            }
+                        }
+                        break;
                 }
-                else{
-                    std::vector<std::string> directories;
-                    boost::split( directories, opts[0], boost::is_any_of(","), boost::token_compress_on );
-                    std::string mountpoint = opts[1];
-                    
-                    std::cout << "mountpoint: " << mountpoint << std::endl;
-                    for(unsigned int i=0;i<directories.size();i++){
-                        std::cout << "directory: " << directories[i] << std::endl;
+
+                for (const auto& dir: directories) {
+                    struct stat info;
+                    if (stat(dir.c_str(), &info))
+                    {
+                        throw std::runtime_error(std::string("cannot stat: ")+dir);
+                    }
+                    if (!S_ISDIR(info.st_mode))
+                    {
+                        throw std::runtime_error(std::string("not a directory: ")+dir);
                     }
                 }
+
+                switch(access(mountpoint.c_str(), F_OK)){
+                    case -1:
+                        if(errno == ENOTCONN){
+                            if(::umount(mountpoint.c_str())==0 && access(mountpoint.c_str(), F_OK)==0){
+                                break;
+                            }
+                        }
+                        throw std::runtime_error(std::string("inaccessable mount point given: ")+mountpoint);
+                        break;
+                }
+
+                this->config.option("mountpoint", mountpoint);
+                this->config.option("directories", directories);
+
+                std::set<std::string> options;
+                std::vector<std::string> cmdoptions = vm["option"].as<std::vector<std::string> >();
+                for(unsigned int i=0;i<cmdoptions.size();i++){
+                    std::vector<std::string> current;
+                    boost::split( current, cmdoptions[i], boost::is_any_of(","), boost::token_compress_on );
+                    std::copy( cmdoptions.begin(), cmdoptions.end(), std::inserter( options, options.end() ) );
+                }
+
+                this->config.option("options", options);
+
+                if (vm.count("foreground")) {
+                    this->config.option("foreground", true);
+                }
+                else{
+                    this->config.option("foreground", false);
+                }
+
+                this->fuse.setUp(vm.count("single")!=0);
             }
         }catch(std::runtime_error &e){ 
           std::cerr << "ERROR: " << e.what() << std::endl << std::endl; 
@@ -129,14 +164,6 @@ namespace Springy{
           this->exitStatus = -1;
           return *this;
         } 
-    /*
-        if (vm.count("compression")) {
-            std::cout << "Compression level was set to " 
-         << vm["compression"].as<int>() << ".\n";
-        } else {
-            std::cout << "Compression level was not set.\n";
-        }
-    */
     /*
         size_t i=0;
         struct fuse_args tmp = FUSE_ARGS_INIT(argc, argv);
@@ -152,40 +179,6 @@ namespace Springy{
         mhdd->server_auth_username = NULL;
         mhdd->server_auth_password = NULL;
         mhdd->server_auth_htdigest = NULL;
-
-        mhdd->loglevel=MHDD_DEFAULT_DEBUG_LEVEL;
-
-        {
-            memcpy(&mhdd->args, &tmp, sizeof(struct fuse_args));
-        }
-
-        if (fuse_opt_parse(&mhdd->args, &mhdd, mhddfs_opts, mhddfs_opt_proc)==-1)
-            usage(stderr);
-
-        if (mhdd->dirs.size()<1) usage(stderr);
-
-        mhdd->mount = mhdd->dirs[mhdd->dirs.size()-1];
-        mhdd->dirs.resize(mhdd->dirs.size()-1);
-
-        char *mount = realpath(mhdd->mount.c_str(), NULL);
-        if(mount==NULL){
-            fprintf(stderr,
-                "mhddfs: '%s' - invalid mountpoint (%d:%s)\n\n",
-                mhdd->mount.c_str(), errno, strerror(errno));
-            exit(-1);
-        }
-        mhdd->mount = std::string(mount);
-        free(mount);
-
-        for(i=0;i<mhdd->dirs.size();i++){
-            if(mhdd->dirs[i].find(mhdd->mount)!=std::string::npos){
-                fprintf(stderr,
-                    "mhddfs: '%s' - invalid directory, within mountpoint '%s'\n\n",
-                    mhdd->dirs[i].c_str(),
-                    mhdd->mount.c_str());
-                exit(-1);
-            }
-        }
 
         //if(mhdd->server_cert_pem!=NULL && mhdd->server_key_pem!=NULL){
         //    mhdd->server_cert_pem = file_get_contents(mhdd->server_cert_pem);
@@ -213,140 +206,6 @@ namespace Springy{
                         mhdd->mount.c_str(), mhdd->server_auth_htdigest);
                 exit(-1);
         }
-
-        check_if_unique_mountpoints();
-
-        #if FUSE_VERSION >= 27
-        mhdd->FUSE_MP_OPT_STR.append("-osubtype=mhddfs,fsname=");
-        #else
-        mhdd->FUSE_MP_OPT_STR.append("-ofsname=mhddfs#");
-        #endif
-
-        for (i=0; i<mhdd->dirs.size(); i++)
-        {
-            if (i) mhdd->FUSE_MP_OPT_STR.append(";");
-            mhdd->FUSE_MP_OPT_STR.append(mhdd->dirs[i]);
-        }
-        if(!i){
-            mhdd->FUSE_MP_OPT_STR.append("none");
-        }
-        fuse_opt_insert_arg(&mhdd->args, 1, mhdd->FUSE_MP_OPT_STR.c_str());
-        fuse_opt_insert_arg(&mhdd->args, 1, mhdd->mount.c_str());
-
-        for(i=0; i<mhdd->dirs.size(); i++)
-        {
-            struct stat info;
-            if (stat(mhdd->dirs[i].c_str(), &info))
-            {
-                fprintf(stderr,
-                    "mhddfs: can not stat '%s': %s\n",
-                    mhdd->dirs[i].c_str(), strerror(errno));
-                exit(-1);
-            }
-            if (!S_ISDIR(info.st_mode))
-            {
-                fprintf(stderr,
-                    "mhddfs: '%s' - is not directory\n\n",
-                    mhdd->dirs[i].c_str());
-                exit(-1);
-            }
-
-            fprintf(stderr,
-                "mhddfs: directory '%s' added to list\n",
-                mhdd->dirs[i].c_str());
-        }
-
-        do{
-            if(access(mhdd->mount.c_str(), F_OK)==-1){
-                if(errno == ENOTCONN){
-                    if(umount(mhdd->mount.c_str())==0 && access(mhdd->mount.c_str(), F_OK)==0){
-                        break;
-                    }
-                }
-                fprintf(stderr,
-                    "mhddfs: inaccessable mount point given '%s' (%d:%s)\n",
-                    mhdd->mount.c_str(), errno, strerror(errno));
-            }
-        }while(0);
-
-        fprintf(stderr, "mhddfs: mount to: %s\n", mhdd->mount.c_str());
-        fprintf(stderr, "mhddfs: loglevel: %d\n", mhdd->loglevel);
-
-        if (mhdd->debug_file)
-        {
-            fprintf(stderr, "mhddfs: using debug file: %s, loglevel=%d\n",
-                    mhdd->debug_file, mhdd->loglevel);
-            mhdd->debug=fopen(mhdd->debug_file, "a");
-            if (!mhdd->debug)
-            {
-                fprintf(stderr, "Can not open file '%s': %s",
-                        mhdd->debug_file,
-                        strerror(errno));
-                exit(-1);
-            }
-            setvbuf(mhdd->debug, NULL, _IONBF, 0);
-        }
-        else{
-            mhdd->debug_file = NULL;
-            mhdd->debug = stderr;
-        }
-
-        //mhdd->move_limit = DEFAULT_MLIMIT;
-        mhdd->move_limit = 0;
-
-        if (mhdd->mlimit_str)
-        {
-            int len = strlen(mhdd->mlimit_str);
-
-            if (len) {
-                switch(mhdd->mlimit_str[len-1])
-                {
-                    case 'm':
-                    case 'M':
-                        mhdd->mlimit_str[len-1]=0;
-                        mhdd->move_limit=atoll(mhdd->mlimit_str);
-                        mhdd->move_limit*=1024*1024;
-                        break;
-                    case 'g':
-                    case 'G':
-                        mhdd->mlimit_str[len-1]=0;
-                        mhdd->move_limit=atoll(mhdd->mlimit_str);
-                        mhdd->move_limit*=1024*1024*1024;
-                        break;
-
-                    case 'k':
-                    case 'K':
-                        mhdd->mlimit_str[len-1]=0;
-                        mhdd->move_limit=atoll(mhdd->mlimit_str);
-                        mhdd->move_limit*=1024;
-                        break;
-
-                    case '%':
-                        mhdd->mlimit_str[len-1]=0;
-                        mhdd->move_limit=atoll(mhdd->mlimit_str);
-                        break;
-
-                    default:
-                        mhdd->move_limit=atoll(mhdd->mlimit_str);
-                        break;
-                }
-            }
-
-            if (mhdd->move_limit < MINIMUM_MLIMIT) {
-                if (!mhdd->move_limit) {
-                    mhdd->move_limit = DEFAULT_MLIMIT;
-                } else {
-                    if (mhdd->move_limit > 100)
-                        mhdd->move_limit = MINIMUM_MLIMIT;
-                }
-            }
-        }
-        if (mhdd->move_limit <= 100)
-            fprintf(stderr, "mhddfs: move size limit %ld%%\n", mhdd->move_limit);
-        else
-            fprintf(stderr, "mhddfs: move size limit %ld bytes\n", mhdd->move_limit);
-
-        mhdd_debug(MHDD_MSG, " >>>>> mhdd " VERSION " started <<<<<\n");
         */
         return *this;
     }
@@ -354,6 +213,31 @@ namespace Springy{
     Brain& Brain::run(){
         if(this->exitStatus){
             return *this;
+        }
+
+        if(false==this->config.option<bool>("foreground")){
+            pid_t process_id = fork();
+            if(process_id<0){
+                // fork failed
+                this->exitStatus = -1;
+                return *this;
+            }
+            else if(process_id > 0){
+                exit(0);
+            }
+
+            // child process
+
+            //unmask the file mode
+            umask(0);
+            //set new session
+            setsid();
+            // Change the current working directory to root.
+            chdir("/");
+            // Close stdin. stdout and stderr
+            close(STDIN_FILENO);
+            close(STDOUT_FILENO);
+            close(STDERR_FILENO);
         }
 
         signals.async_wait(Brain::signalHandler);
@@ -406,8 +290,11 @@ namespace Springy{
         return *this;
     }
     Brain& Brain::tearDown(){
-        //fuse_teardown(mhdd->fuse, mountpoint);
-        //delete mhdd;
+        if(this->exitStatus){
+            return *this;
+        }
+
+        this->fuse.tearDown();
 
         return *this;
     }

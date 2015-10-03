@@ -5,6 +5,8 @@
 #include <boost/any.hpp>
 #include <boost/logic/tribool.hpp>
 
+#include "util/synchronized.hpp"
+
 namespace Springy{
     class Settings{
         protected:
@@ -21,10 +23,29 @@ namespace Springy{
             boost::logic::tribool overwriteSettings();
             Settings& overwriteSettings(boost::logic::tribool bOverwriteSettings);
 
-            template<typename T> T option(std::string name);
-            Settings& option(std::string name, boost::any value, boost::logic::tribool bOverwriteSettings=boost::logic::tribool());
+            bool exists(std::string name);
 
-            template<typename T> T& operator[](std::string name);
+            template<typename T> T& option(std::string name){
+                Synchronized local(this->localStorage, Synchronized::LockType::READ);
+
+                storage::iterator it = this->localStorage.find(name);
+                if(it==this->localStorage.end()){
+                    Synchronized syncToken(this->globalStorage, Synchronized::LockType::READ);
+                    it = this->globalStorage.find(name);
+                }
+                if(it==this->localStorage.end()){
+                    throw std::runtime_error(std::string("unkown option given: ")+name);
+                }
+
+                boost::any &rval = it->second;
+
+                return boost::any_cast<T&>(rval);
+            }
+            template<typename T> T& operator[](std::string name){
+                return this->option<T&>(name);
+            }
+
+            Settings& option(std::string name, boost::any value, boost::logic::tribool bOverwriteSettings=boost::logic::tribool());
 
             // known options
             std::string id();
