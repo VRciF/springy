@@ -43,7 +43,6 @@ namespace Springy{
             char *fmountpoint;
             std::string fuseoptions;
             std::thread th;
-            int thrunning;
 
             struct fuse_operations fops;
             struct fuse* fuse;

@@ -5,7 +5,7 @@
 namespace Springy{
     Brain::Brain() : preventIOServiceFromExitWorker(io_service),
                      instanceUUID(boost::uuids::random_generator()()),
-                     signals(io_service, SIGHUP),
+                     signals(io_service, SIGINT, SIGTERM, SIGHUP),
                      visibleDesc("Springy options")
     {}
 

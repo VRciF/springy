@@ -4,6 +4,7 @@
 #include "util/file.hpp"
 
 #include <sys/mount.h>
+#include <string.h>
 
 #include <boost/log/core.hpp>
 #include <boost/log/trivial.hpp>
@@ -72,40 +73,65 @@ namespace Springy{
                 this->exitStatus = boost::optional<int>(0);
                 return *this;
             }
+            
 
-            std::vector<std::string> opts = vm["input"].as<std::vector<std::string> >();
-            if(opts.size()!=0){
-                std::string mountpoint;
-                std::set<std::string> directories;
+            std::vector<std::string> opts;
+            if(vm.count("input")){
+                opts = vm["input"].as<std::vector<std::string> >();
+            }
 
-                switch(opts.size()){
-                    case 0:
-                        throw std::runtime_error("there must be either one mount points and volume directories OR just a mount point");
-                    default:
-                        {
-                            mountpoint = Util::File::realpath(opts[opts.size()-1]);
-                            for(unsigned int i=0;i<opts.size()-1;i++){
-                                std::string file = opts[i];
-                                std::vector<std::string> tmpdirs;
-                                try{
-                                    file = Util::File::realpath(file);
-                                    tmpdirs.push_back(file);
-                                }catch(...){
-                                    boost::split( tmpdirs, opts[0], boost::is_any_of(","), boost::token_compress_on );
-                                }
+            std::string mountpoint;
+            std::set<std::string> directories;
 
-                                for(unsigned int i=0;i<tmpdirs.size();i++){
-                                    std::string directory = Util::File::realpath(Util::String::urldecode(tmpdirs[i]));
-                                    
-                                    if(directory.find(mountpoint)!=std::string::npos){
-                                        throw std::runtime_error(std::string("directory within mountpoint not allowed: ")+directory);
+            switch(opts.size()){
+                case 0:
+                    throw std::runtime_error("there must be exactly one mount point and zero or more volume directories");
+                default:
+                    {
+                        mountpoint = opts[opts.size()-1];
+                        switch(::access(mountpoint.c_str(), F_OK)){
+                            case -1:
+                                if(errno == ENOTCONN){
+                                    std::string fuserumountCommand = std::string("fusermount -u \"")+mountpoint+"\"";
+                                    system(fuserumountCommand.c_str());
+                                    if(::access(mountpoint.c_str(), F_OK)==0){
+                                        break;
                                     }
 
-                                    directories.insert(directory);
+                                    if(::umount(mountpoint.c_str())!=0){
+                                        std::cerr << strerror(errno) << std::endl;
+                                        throw std::runtime_error(std::string("couldnt unmount given mountpoint: ")+mountpoint);
+                                    }
+                                    if(::access(mountpoint.c_str(), F_OK)!=0){
+                                        throw std::runtime_error(std::string("inaccessable mount point given: ")+mountpoint);
+                                    }
                                 }
+                                throw std::runtime_error(std::string("inaccessable mount point given: ")+mountpoint);
+                        }
+
+                        mountpoint = Util::File::realpath(mountpoint);
+                        for(unsigned int i=0;i<opts.size()-1;i++){
+                            std::string file = opts[i];
+                            std::vector<std::string> tmpdirs;
+                            try{
+                                file = Util::File::realpath(file);
+                                tmpdirs.push_back(file);
+                            }catch(...){
+                                boost::split( tmpdirs, opts[0], boost::is_any_of(","), boost::token_compress_on );
+                            }
+
+                            for(unsigned int i=0;i<tmpdirs.size();i++){
+                                std::string directory = Util::File::realpath(Util::String::urldecode(tmpdirs[i]));
+                                
+                                if(directory.find(mountpoint)!=std::string::npos){
+                                    throw std::runtime_error(std::string("directory within mountpoint not allowed: ")+directory);
+                                }
+
+                                directories.insert(directory);
                             }
                         }
-                        break;
+                    }
+                    break;
                 }
 
                 for (const auto& dir: directories) {
@@ -120,22 +146,15 @@ namespace Springy{
                     }
                 }
 
-                switch(access(mountpoint.c_str(), F_OK)){
-                    case -1:
-                        if(errno == ENOTCONN){
-                            if(::umount(mountpoint.c_str())==0 && access(mountpoint.c_str(), F_OK)==0){
-                                break;
-                            }
-                        }
-                        throw std::runtime_error(std::string("inaccessable mount point given: ")+mountpoint);
-                        break;
-                }
-
                 this->config.option("mountpoint", mountpoint);
                 this->config.option("directories", directories);
 
                 std::set<std::string> options;
-                std::vector<std::string> cmdoptions = vm["option"].as<std::vector<std::string> >();
+                std::vector<std::string> cmdoptions;
+                if(vm.count("option")){
+                    cmdoptions = vm["option"].as<std::vector<std::string> >();
+                }
+
                 for(unsigned int i=0;i<cmdoptions.size();i++){
                     std::vector<std::string> current;
                     boost::split( current, cmdoptions[i], boost::is_any_of(","), boost::token_compress_on );
@@ -152,7 +171,6 @@ namespace Springy{
                 }
 
                 this->fuse.setUp(vm.count("single")!=0);
-            }
         }catch(std::runtime_error &e){ 
           std::cerr << "ERROR: " << e.what() << std::endl << std::endl; 
           this->printHelp(std::cerr);
@@ -209,7 +227,15 @@ namespace Springy{
         */
         return *this;
     }
-    void Brain::signalHandler(boost::system::error_code error, int signal_number){}
+    void Brain::signalHandler(boost::system::error_code error, int signal_number){
+        switch(signal_number){
+            case SIGHUP:
+                break;
+            case SIGINT: case SIGTERM:
+                Brain::instance().io_service.stop();
+                break;
+        }
+    }
     Brain& Brain::run(){
         if(this->exitStatus){
             return *this;
@@ -245,17 +271,6 @@ namespace Springy{
         io_service.run();
 
         /*
-        do{
-            flist_init();
-
-            if(!mhddfs_httpd_startServer()){
-                fprintf(stderr, "failed to start webserver on port %d\n", mhdd->server_port);
-                Brain::exitStatus = -1;
-                break;
-            }
-
-            signal(SIGPIPE, SIG_IGN);
-
             memset (&act, '\0', sizeof(act));
             act.sa_sigaction = &mhdd_termination_handler;
             // The SA_SIGINFO flag tells sigaction() to use the sa_sigaction field, not sa_handler.
@@ -269,22 +284,6 @@ namespace Springy{
                 Brain::exitStatus = -1;
                 break;
             }
-
-            //return fuse_main(args->argc, args->argv, &mhdd_oper, 0);
-            mhdd->fuse = fuse_setup(mhdd->args.argc, mhdd->args.argv, &mhdd_oper, sizeof(mhdd_oper),
-                              &mountpoint, &multithreaded, &mhdd);
-
-            if(mhdd->fuse==NULL){
-                Brain::exitStatus = -1;
-                break;
-            }
-
-            if (multithreaded){
-                res = fuse_loop_mt(mhdd->fuse);
-            }else{
-                res = fuse_loop(mhdd->fuse);
-            }
-        }while(0);
         */
 
         return *this;

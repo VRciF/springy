@@ -7,6 +7,7 @@
 #include <signal.h>
 
 #include <set>
+#include <sstream>
 #include <boost/algorithm/string/join.hpp>
 
 namespace Springy{
@@ -73,8 +74,9 @@ Fuse& Fuse::setUp(bool singleThreaded){
     if(this->singleThreaded){
         fuseArgv.push_back("-s");
     }
-
-    std::set<std::string> &options = this->config->option<std::set<std::string> >("options");
+    fuseArgv.push_back("-f");
+    
+    std::set<std::string> options = this->config->option<std::set<std::string> >("options");
     this->fuseoptions = boost::algorithm::join(options, ",");
     if(this->fuseoptions.size()>0){
         fuseArgv.push_back("-o");
@@ -83,6 +85,7 @@ Fuse& Fuse::setUp(bool singleThreaded){
 
     this->fuse = fuse_setup(fuseArgv.size(), (char**)&fuseArgv[0], &this->fops, sizeof(this->fops),
                       &this->fmountpoint, &multithreaded, static_cast<void*>(this));
+
     if(this->fuse==NULL){
         // fuse failed!
         throw std::runtime_error("initializing fuse failed");
@@ -97,23 +100,26 @@ Fuse& Fuse::run(){
 }
 Fuse& Fuse::tearDown(){
     if(this->fuse && !fuse_exited(this->fuse)){
+        fuse_teardown(this->fuse, this->fmountpoint);
 	    fuse_exit(this->fuse);
+        this->fmountpoint = NULL;
 	}
 
-	struct stat buf;
-	::stat(this->mountpoint.c_str(), &buf);
+    if(this->th.joinable()){
+        struct stat buf;
+        ::stat(this->mountpoint.c_str(), &buf);
 
-    // wait for 
-    try{
-        this->th.join();
-    }catch(...){}
+        // wait for 
+        try{
+            this->th.join();
+        }catch(...){}
+    }
 
     return *this;
 }
 
 void Fuse::thread(Fuse *instance){
     int res = 0;
-    instance->thrunning = 1;
 
 	sigset_t set;
 	// Block all signals in fuse thread - so all signals are delivered to another (main) thread
@@ -129,7 +135,6 @@ void Fuse::thread(Fuse *instance){
 
 	fuse_teardown(instance->fuse, instance->fmountpoint);
 	instance->fuse = NULL;
-    instance->thrunning = 0;
     if(res!=0){
         // force shutdown
     }
