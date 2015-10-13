@@ -5,8 +5,12 @@
 #include <errno.h>
 #include <pthread.h>
 #include <signal.h>
+#include <sys/types.h>
+#include <attr/xattr.h>
+#include <dirent.h>
 
 #include <set>
+#include <map>
 #include <sstream>
 #include <boost/algorithm/string/join.hpp>
 
@@ -25,38 +29,37 @@ Fuse& Fuse::init(Settings *config){
     this->fops.destroy = Fuse::destroy;
     this->fops.getattr = Fuse::getattr;
 
-
-    /*
-            fops.getattr    	= mhdd_stat;
-            fops.statfs     	= mhdd_statfs;
-            fops.readdir    	= mhdd_readdir;
-            fops.readlink   	= mhdd_readlink;
-            fops.open       	= mhdd_fileopen;
-            fops.release    	= mhdd_release;
-            fops.read       	= mhdd_read;
-            fops.write      	= mhdd_write;
-            fops.create     	= mhdd_create;
-            fops.truncate   	= mhdd_truncate;
-            fops.ftruncate  	= mhdd_ftruncate;
-            fops.access     	= mhdd_access;
-            fops.mkdir      	= mhdd_mkdir;
-            fops.rmdir      	= mhdd_rmdir;
-            fops.unlink     	= mhdd_unlink;
-            fops.rename     	= mhdd_rename;
-            fops.utimens    	= mhdd_utimens;
-            fops.chmod      	= mhdd_chmod;
-            fops.chown      	= mhdd_chown;
-            fops.symlink    	= mhdd_symlink;
-            fops.mknod      	= mhdd_mknod;
-            fops.fsync      	= mhdd_fsync;
-            fops.link		    = mhdd_link;
-        #ifndef WITHOUT_XATTR
-                fops.setxattr   	= mhdd_setxattr;
-                fops.getxattr   	= mhdd_getxattr;
-                fops.listxattr  	= mhdd_listxattr;
-                fops.removexattr	= mhdd_removexattr;
-        #endif
-    */
+    fops.getattr    	= Fuse::getattr;
+    fops.statfs     	= Fuse::statfs;
+    fops.readdir    	= Fuse::readdir;
+    fops.readlink   	= Fuse::readlink;
+/*
+    fops.open       	= mhdd_fileopen;
+    fops.release    	= mhdd_release;
+    fops.read       	= mhdd_read;
+    fops.write      	= mhdd_write;
+    fops.create     	= mhdd_create;
+    fops.truncate   	= mhdd_truncate;
+    fops.ftruncate  	= mhdd_ftruncate;
+    fops.access     	= mhdd_access;
+    fops.mkdir      	= mhdd_mkdir;
+    fops.rmdir      	= mhdd_rmdir;
+    fops.unlink     	= mhdd_unlink;
+    fops.rename     	= mhdd_rename;
+    fops.utimens    	= mhdd_utimens;
+    fops.chmod      	= mhdd_chmod;
+    fops.chown      	= mhdd_chown;
+    fops.symlink    	= mhdd_symlink;
+    fops.mknod      	= mhdd_mknod;
+    fops.fsync      	= mhdd_fsync;
+    fops.link		    = mhdd_link;
+*/
+#ifndef WITHOUT_XATTR
+    fops.setxattr   	= Fuse::setxattr;
+    fops.getxattr   	= Fuse::getxattr;
+    fops.listxattr  	= Fuse::listxattr;
+    fops.removexattr	= Fuse::removexattr;
+#endif
 
     return *this;
 }
@@ -151,83 +154,83 @@ void Fuse::determineCaller(uid_t *u, gid_t *g, pid_t *p, mode_t *mask){
 
 Fuse::~Fuse(){}
 
+std::string Fuse::concatPath(const std::string &p1, const std::string &p2){
+    std::string rval = p1;
+    if(rval[rval.size()-1]!='/'){ rval += "/"; }
+    if(p2[0]=='/'){
+        rval += p2.substr(1);
+    }
+    else{
+        rval += p2;
+    }
 
+    return rval;
+}
+std::string Fuse::findPath(std::string file_name, struct stat *buf){
+	struct stat b;
+	if(buf==NULL){ buf = &b; }
 
+	std::vector<std::string> &directories = this->config->option<std::vector<std::string> >("directories");
+	Synchronized sDirs(directories, Synchronized::LockType::READ);
+
+	for(unsigned int i=0;i<directories.size();i++){
+		std::string path = this->concatPath(directories[i], file_name);
+		if(::lstat(path.c_str(), buf) != -1){ return path; }
+    }
+    throw std::runtime_error("file not found");
+}
 
 void* Fuse::op_init(struct fuse_conn_info *conn){
     return static_cast<void*>(this);
 }
-void Fuse::op_destroy(void *arg){}
+void Fuse::op_destroy(void *arg){
+	//mhddfs_httpd_stopServer();
+}
 
 int Fuse::op_getattr(const std::string file_name, struct stat *buf)
 {
-/*
-    std::string path = find_path(file_name);
-	if (path.size()) {
-		int ret = ::lstat(path.c_str(), buf);
-
-		if (ret == -1) return -errno;
+	try{
+		std::string path = this->findPath(file_name, buf);
 		return 0;
 	}
-	errno = ENOENT;
-	return -errno;
-*/    
+	catch(...){}
+
     return -ENOENT;
 }
 
-void* Fuse::init(struct fuse_conn_info *conn){
-    struct fuse_context *ctx = fuse_get_context();
-    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->init(conn);
-}
-void Fuse::destroy(void *arg){
-    struct fuse_context *ctx = fuse_get_context();
-    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->destroy(arg);
-}
-
-int Fuse::getattr(const char *file_name, struct stat *buf)
+int Fuse::op_statfs(const std::string path, struct statvfs *buf)
 {
-    struct fuse_context *ctx = fuse_get_context();
-    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_getattr(file_name, buf);
-}
-
-/*
-static int mhdd_statfs(const char *path, struct statvfs *buf)
-{
-	size_t i, j;
-    std::vector<struct statvfs> stats;
-    std::vector<dev_t> devices;
-
-	struct stat st;
+	std::map<dev_t, struct statvfs> stats;
+	std::map<dev_t, struct statvfs>::iterator it;
+	std::vector<std::string> &directories = this->config->option<std::vector<std::string> >("directories");
+	Synchronized sDirs(directories, Synchronized::LockType::READ);
 
     unsigned long min_block = 0, min_frame = 0;
 
-	mhdd_debug(MHDD_MSG, "mhdd_statfs: %s\n", path);
-
-    stats.resize(mhdd->dirs.size());
-    devices.resize(mhdd->dirs.size());
-
-	for (i = 0; i < mhdd->dirs.size(); i++) {
-		int ret = statvfs(mhdd->dirs[i].c_str(), &stats[i]);
+	for(unsigned int i=0;i<directories.size();i++){
+		struct stat st;
+		int ret = stat(directories[i].c_str(), &st);
+		if (ret != 0) {
+			return -errno;
+		}
+		if(stats.find(st.st_dev)!=stats.end()){ continue; }
+		
+		struct statvfs stv;
+		ret = ::statvfs(directories[i].c_str(), &stv);
 		if (ret != 0) {
 			return -errno;
 		}
 
-		ret = stat(mhdd->dirs[i].c_str(), &st);
-		if (ret != 0) {
-			return -errno;
+		stats[st.st_dev] = stv;
+
+		if(stats.size()==1){
+			min_block = stv.f_bsize,
+			min_frame = stv.f_frsize;
 		}
-		devices[i] = st.st_dev;
-	}
-
-    min_block = stats[0].f_bsize,
-    min_frame = stats[0].f_frsize;
-
-    for (i = 1; i < mhdd->dirs.size(); i++) {
-		if (min_block>stats[i].f_bsize) min_block = stats[i].f_bsize;
-		if (min_frame>stats[i].f_frsize) min_frame = stats[i].f_frsize;
+		else{
+			if (min_block>stv.f_bsize) min_block = stv.f_bsize;
+			if (min_frame>stv.f_frsize) min_frame = stv.f_frsize;
+		}
 	}
 
 	if (!min_block)
@@ -235,51 +238,38 @@ static int mhdd_statfs(const char *path, struct statvfs *buf)
 	if (!min_frame)
 		min_frame = 512;
 
-    for (i = 0; i < mhdd->dirs.size(); i++) {
-		if (stats[i].f_bsize>min_block) {
-			stats[i].f_bfree    *=  stats[i].f_bsize/min_block;
-			stats[i].f_bavail   *=  stats[i].f_bsize/min_block;
-			stats[i].f_bsize    =   min_block;
+    for (it = stats.begin(); it != stats.end(); it++) {
+		if (it->second.f_bsize>min_block) {
+			it->second.f_bfree    *=  it->second.f_bsize/min_block;
+			it->second.f_bavail   *=  it->second.f_bsize/min_block;
+			it->second.f_bsize    =   min_block;
 		}
-		if (stats[i].f_frsize>min_frame) {
-			stats[i].f_blocks   *=  stats[i].f_frsize/min_frame;
-			stats[i].f_frsize   =   min_frame;
+		if (it->second.f_frsize>min_frame) {
+			it->second.f_blocks   *=  it->second.f_frsize/min_frame;
+			it->second.f_frsize   =   min_frame;
 		}
-	}
-
-	memcpy(buf, &stats[0], sizeof(struct statvfs));
-
-    for (i = 1; i < mhdd->dirs.size(); i++) {
-		// if the device already processed, skip it
-		if (devices[i]) {
-			int dup_found = 0;
-			for (j = 0; j < i; j++) {
-				if (devices[j] == devices[i]) {
-					dup_found = 1;
-					break;
-				}
-			}
-
-			if (dup_found)
-				continue;
+		
+		if(it==stats.begin()){
+			memcpy(buf, &it->second, sizeof(struct statvfs));
+			continue;
 		}
 
-		if (buf->f_namemax<stats[i].f_namemax) {
-			buf->f_namemax = stats[i].f_namemax;
+		if (buf->f_namemax<it->second.f_namemax) {
+			buf->f_namemax = it->second.f_namemax;
 		}
-		buf->f_ffree  +=  stats[i].f_ffree;
-		buf->f_files  +=  stats[i].f_files;
-		buf->f_favail +=  stats[i].f_favail;
-		buf->f_bavail +=  stats[i].f_bavail;
-		buf->f_bfree  +=  stats[i].f_bfree;
-		buf->f_blocks +=  stats[i].f_blocks;
+		buf->f_ffree  +=  it->second.f_ffree;
+		buf->f_files  +=  it->second.f_files;
+		buf->f_favail +=  it->second.f_favail;
+		buf->f_bavail +=  it->second.f_bavail;
+		buf->f_bfree  +=  it->second.f_bfree;
+		buf->f_blocks +=  it->second.f_blocks;
 	}
 
 	return 0;
 }
 
-static int mhdd_readdir(
-		const char *dirname,
+int Fuse::op_readdir(
+		const std::string dirname,
 		void *buf,
 		fuse_fill_dir_t filler,
 		off_t offset,
@@ -291,11 +281,12 @@ static int mhdd_readdir(
 	size_t i, found;
     std::vector<std::string> dirs;
 
-	mhdd_debug(MHDD_MSG, "mhdd_readdir: %s\n", dirname);
+	std::vector<std::string> &directories = this->config->option<std::vector<std::string> >("directories");
+	Synchronized sDirs(directories, Synchronized::LockType::READ);
 
 	// find all dirs
-    for (found = i = 0; i < mhdd->dirs.size(); i++) {
-		std::string path = create_path(mhdd->dirs[i], dirname);
+    for (found = i = 0; i < directories.size(); i++) {
+		std::string path = this->concatPath(directories[i], dirname);
 		if (stat(path.c_str(), &st) == 0) {
 			found++;
 			if (S_ISDIR(st.st_mode)) {
@@ -320,14 +311,14 @@ static int mhdd_readdir(
 		if (!dh)
 			continue;
 
-		while((de = readdir(dh))) {
+		while((de = ::readdir(dh))) {
 			// find dups
             if(dir_item_ht.find(de->d_name)!=dir_item_ht.end()){
                 continue;
             }
 
 			// add item
-            std::string object_name = create_path(dirs[i], de->d_name);
+            std::string object_name = this->concatPath(dirs[i], de->d_name);
 
             lstat(object_name.c_str(), &st);
             dir_item_ht.insert(std::make_pair(de->d_name, st));
@@ -344,23 +335,22 @@ static int mhdd_readdir(
 	return 0;
 }
 
-static int mhdd_readlink(const char *path, char *buf, size_t size)
+int Fuse::op_readlink(const std::string path, char *buf, size_t size)
 {
     int res = 0;
+    try{
+        std::string link = this->findPath(path);
+        memset(buf, 0, size);
+        res = ::readlink(link.c_str(), buf, size);
 
-	mhdd_debug(MHDD_MSG, "mhdd_readlink: %s, size = %d\n", path, size);
-
-	std::string link = find_path(path);
-	if (link.size()) {
-		memset(buf, 0, size);
-		res = readlink(link.c_str(), buf, size);
-
-		if (res >= 0)
-			return 0;
-	}
-	return -1;
+        if (res >= 0)
+            return 0;
+        return -errno;
+    }
+    catch(...){}
+	return -ENOENT;
 }
-
+/*
 #define CREATE_FUNCTION 0
 #define OPEN_FUNCION    1
 
@@ -1010,95 +1000,121 @@ static int mhdd_fsync(const char *path, int isdatasync,
 		return -errno;
 	return 0;
 }
+*/
 
 #ifndef WITHOUT_XATTR
-static int mhdd_setxattr(const char *path, const char *attrname,
+int Fuse::op_setxattr(const std::string file_name, const std::string attrname,
                 const char *attrval, size_t attrvalsize, int flags)
 {
-	std::string real_path = find_path(path);
-    int res = 0;
-
-	if (real_path.size() == 0)
-		return -ENOENT;
-
-	mhdd_debug(MHDD_MSG,
-		"mhdd_setxattr: path = %s name = %s value = %s size = %d\n",
-                real_path.c_str(), attrname, attrval, attrvalsize);
-    res = setxattr(real_path.c_str(), attrname, attrval, attrvalsize, flags);
-
-    if (res == -1) return -errno;
-    return 0;
+	try{
+		std::string path = this->findPath(file_name);
+        if (::setxattr(path.c_str(), attrname.c_str(), attrval, attrvalsize, flags) == -1) return -errno;
+		return 0;
+	}
+	catch(...){}
+	return -ENOENT;
 }
 
-static int mhdd_getxattr(const char *path, const char *attrname, char *buf, size_t count)
+int Fuse::op_getxattr(const std::string file_name, const std::string attrname, char *buf, size_t count)
 {
-    int size = 0;
-	std::string real_path = find_path(path);
-	if (real_path.size() == 0)
-		return -ENOENT;
-
-	mhdd_debug(MHDD_MSG,
-		"mhdd_getxattr: path = %s name = %s bufsize = %d\n",
-                real_path.c_str(), attrname, count);
-    size = getxattr(real_path.c_str(), attrname, buf, count);
-
-    if (size == -1) return -errno;
-    return size;
+	try{
+		std::string path = this->findPath(file_name);
+        int size = ::getxattr(path.c_str(), attrname.c_str(), buf, count);
+        if(size == -1) return -errno;
+		return size;
+	}
+	catch(...){}
+	return -ENOENT;
 }
 
-static int mhdd_listxattr(const char *path, char *buf, size_t count)
+int Fuse::op_listxattr(const std::string file_name, char *buf, size_t count)
 {
-    int ret = 0;
-	std::string real_path = find_path(path);
-	if (real_path.size() == 0)
-		return -ENOENT;
-
-	mhdd_debug(MHDD_MSG,
-		"mhdd_listxattr: path = %s bufsize = %d\n",
-                real_path.c_str(), count);
-
-    ret=listxattr(real_path.c_str(), buf, count);
-
-    if (ret == -1) return -errno;
-    return ret;
+    try{
+		std::string path = this->findPath(file_name);
+		int ret = 0;
+        if((ret=::listxattr(path.c_str(), buf, count)) == -1) return -errno;
+		return ret;
+	}
+	catch(...){}
+	return -ENOENT;
 }
 
-static int mhdd_removexattr(const char *path, const char *attrname)
+int Fuse::op_removexattr(const std::string file_name, const std::string attrname)
 {
-    int res = 0;
-	std::string real_path = find_path(path);
-	if (real_path.size() == 0)
-		return -ENOENT;
-
-	mhdd_debug(MHDD_MSG,
-		"mhdd_removexattr: path = %s name = %s\n",
-                real_path.c_str(), attrname);
-
-    res = removexattr(real_path.c_str(), attrname);
-
-    if (res == -1) return -errno;
-    return 0;
+	try{
+		std::string path = this->findPath(file_name);
+        if(::removexattr(path.c_str(), attrname.c_str()) == -1) return -errno;
+		return 0;
+	}
+	catch(...){}
+	return -ENOENT;
 }
 #endif
 
-void* mhdd_init(struct fuse_conn_info *conn){
-    return NULL;
+
+
+
+////// static functions to forward function call to Fuse* instance
+
+void* Fuse::init(struct fuse_conn_info *conn){
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->init(conn);
 }
-void mhdd_destroy(void *arg){
-    mhddfs_httpd_stopServer();
+void Fuse::destroy(void *arg){
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->destroy(arg);
 }
 
-static void mhdd_termination_handler(int signum, siginfo_t *siginfo, void *context)
+int Fuse::getattr(const char *file_name, struct stat *buf)
 {
-    if(signum==SIGHUP){ return; }
-
-	mhdd_debug(MHDD_MSG, "mhdd_termination_handler: signal received %d\n", signum);
-
-    if(!fuse_exited(mhdd->fuse)){
-	    fuse_exit(mhdd->fuse);
-	}
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_getattr(file_name, buf);
 }
-*/
+int Fuse::statfs(const char *path, struct statvfs *buf)
+{
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_statfs(path, buf);
+}
+
+int Fuse::readdir(const char *dirname, void *buf, fuse_fill_dir_t filler,
+                  off_t offset, struct fuse_file_info * fi){
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_readdir(dirname, buf, filler, offset, fi);
+}
+int Fuse::readlink(const char *path, char *buf, size_t size){
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_readlink(path, buf, size);    
+}
+
+
+int Fuse::setxattr(const char *path, const char *attrname,
+					const char *attrval, size_t attrvalsize, int flags){
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_setxattr(path, attrname, attrval, attrvalsize, flags);
+}
+int Fuse::getxattr(const char *path, const char *attrname, char *buf, size_t count){
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_getxattr(path, attrname, buf, count);
+}
+int Fuse::listxattr(const char *path, char *buf, size_t count){
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_listxattr(path, buf, count);
+}
+int Fuse::removexattr(const char *path, const char *attrname){
+	struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_removexattr(path, attrname);
+}
+
 
 }
 

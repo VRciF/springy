@@ -4,6 +4,7 @@
 #include "util/file.hpp"
 
 #include <sys/mount.h>
+#include <sys/resource.h>
 #include <string.h>
 
 #include <boost/log/core.hpp>
@@ -42,6 +43,17 @@ namespace Springy{
             ("input", po::value<std::vector<std::string> >()->composing(), "Input")
         ;
         this->m_positional.add("input", -1);
+        
+        struct rlimit limit;
+	    limit.rlim_cur = 512000;
+	    limit.rlim_max = 512000;
+
+	    if(setrlimit(RLIMIT_NOFILE, &limit) != 0)
+	    {
+		   this->exitStatus = -1;
+		   std::cerr << "setrlimit failed";
+		   return *this;
+	    }
 
         try{
             this->fuse.init(&this->config);
