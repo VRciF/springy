@@ -62,6 +62,14 @@ namespace Springy{
             this->exitStatus = -1;
             return *this;
         }
+        
+        try{
+            httpd.init(&this->config);
+        }catch(std::runtime_error &e){
+            std::cerr << e.what() << std::endl;
+            this->exitStatus = -1;
+            return *this;
+        }
 
         return *this;
     }
@@ -252,6 +260,8 @@ namespace Springy{
         if(this->exitStatus){
             return *this;
         }
+        
+        this->httpd.start();
 
         if(false==this->config.option<bool>("foreground")){
             pid_t process_id = fork();
@@ -305,6 +315,7 @@ namespace Springy{
             return *this;
         }
 
+        this->httpd.stop();
         this->fuse.tearDown();
 
         return *this;

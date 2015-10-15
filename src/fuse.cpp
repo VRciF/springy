@@ -9,6 +9,8 @@
 #include <attr/xattr.h>
 #include <dirent.h>
 
+#include "util/synchronized.hpp"
+
 #include <set>
 #include <map>
 #include <sstream>
@@ -33,26 +35,28 @@ Fuse& Fuse::init(Settings *config){
     fops.statfs     	= Fuse::statfs;
     fops.readdir    	= Fuse::readdir;
     fops.readlink   	= Fuse::readlink;
+
+    fops.open       	= Fuse::open;
+    fops.create     	= Fuse::create;
+    fops.release    	= Fuse::release;
+
 /*
-    fops.open       	= mhdd_fileopen;
-    fops.release    	= mhdd_release;
-    fops.read       	= mhdd_read;
-    fops.write      	= mhdd_write;
-    fops.create     	= mhdd_create;
-    fops.truncate   	= mhdd_truncate;
-    fops.ftruncate  	= mhdd_ftruncate;
-    fops.access     	= mhdd_access;
-    fops.mkdir      	= mhdd_mkdir;
-    fops.rmdir      	= mhdd_rmdir;
-    fops.unlink     	= mhdd_unlink;
-    fops.rename     	= mhdd_rename;
-    fops.utimens    	= mhdd_utimens;
-    fops.chmod      	= mhdd_chmod;
-    fops.chown      	= mhdd_chown;
-    fops.symlink    	= mhdd_symlink;
-    fops.mknod      	= mhdd_mknod;
-    fops.fsync      	= mhdd_fsync;
-    fops.link		    = mhdd_link;
+    fops.read       	= Fuse::read;
+    fops.write      	= Fuse::write;
+    fops.truncate   	= Fuse::truncate;
+    fops.ftruncate  	= Fuse::ftruncate;
+    fops.access     	= Fuse::access;
+    fops.mkdir      	= Fuse::mkdir;
+    fops.rmdir      	= Fuse::rmdir;
+    fops.unlink     	= Fuse::unlink;
+    fops.rename     	= Fuse::rename;
+    fops.utimens    	= Fuse::utimens;
+    fops.chmod      	= Fuse::chmod;
+    fops.chown      	= Fuse::chown;
+    fops.symlink    	= Fuse::symlink;
+    fops.mknod      	= Fuse::mknod;
+    fops.fsync      	= Fuse::fsync;
+    fops.link		    = Fuse::link;
 */
 #ifndef WITHOUT_XATTR
     fops.setxattr   	= Fuse::setxattr;
@@ -166,7 +170,7 @@ std::string Fuse::concatPath(const std::string &p1, const std::string &p2){
 
     return rval;
 }
-std::string Fuse::findPath(std::string file_name, struct stat *buf){
+std::string Fuse::findPath(std::string file_name, struct stat *buf, std::string *usedPath){
 	struct stat b;
 	if(buf==NULL){ buf = &b; }
 
@@ -175,9 +179,366 @@ std::string Fuse::findPath(std::string file_name, struct stat *buf){
 
 	for(unsigned int i=0;i<directories.size();i++){
 		std::string path = this->concatPath(directories[i], file_name);
-		if(::lstat(path.c_str(), buf) != -1){ return path; }
+		if(::lstat(path.c_str(), buf) != -1){
+            if(usedPath!=NULL){
+                usedPath->assign(directories[i]);
+            }
+            return path;
+        }
     }
     throw std::runtime_error("file not found");
+}
+std::string Fuse::getMaxFreeSpaceDir(fsblkcnt_t *space){
+	std::vector<std::string> &directories = this->config->option<std::vector<std::string> >("directories");
+	Synchronized sDirs(directories, Synchronized::LockType::READ);
+
+    std::string maxFreeSpaceDir;
+    fsblkcnt_t max_space = 0;
+    if(space!=NULL){
+        space = &max_space;
+    }
+    *space = 0;
+	for(unsigned int i=0;i<directories.size();i++){
+        struct statvfs stf;
+		if (statvfs(directories[i].c_str(), &stf) != 0)
+			continue;
+		fsblkcnt_t curspace  = stf.f_bsize;
+		curspace *= stf.f_bavail;
+        
+        if(curspace>*space){
+            maxFreeSpaceDir = directories[i];
+            *space = curspace;
+        }
+    }
+    if(maxFreeSpaceDir.size()>0){ return maxFreeSpaceDir; }
+
+    throw std::runtime_error("no space");
+}
+std::string Fuse::get_parent_path(const std::string path)
+{
+	std::string dir = path;
+	int len=dir.size();
+	if (len && dir[len-1]=='/'){ --len; dir.pop_back(); }
+	while(len && dir[len-1]!='/'){ --len; dir.pop_back(); }
+	if (len>1 && dir[len-1]=='/'){ --len; dir.pop_back(); }
+	if (len) return dir;
+
+	throw std::runtime_error("no parent directory");
+}
+
+std::string Fuse::get_base_name(const std::string path)
+{
+	std::string dir = path;
+	int len = dir.size();
+	if (len && dir[len-1]=='/'){ --len; dir.pop_back(); }
+    std::string::size_type filePos = dir.rfind('/');
+	if (filePos != std::string::npos)
+	{
+        dir = dir.substr(filePos+1);
+	}
+	return dir;
+}
+
+int Fuse::create_parent_dirs(std::string dir, const std::string path)
+{
+    std::string parent;
+    try{
+	    parent = this->get_parent_path(path);
+    }catch(...){ return 0; }
+
+	std::string exists;
+    try{
+        exists = this->findPath(parent);
+    }
+    catch(...){
+        return -EFAULT;
+    }
+
+	std::string path_parent = this->concatPath(dir, parent);
+	struct stat st;
+
+	// already exists
+	if (::stat(path_parent.c_str(), &st)==0)
+	{
+		return 0;
+	}
+
+	// create parent dirs
+	int res = this->create_parent_dirs(dir, parent);
+
+	if (res!=0)
+	{
+		return res;
+	}
+
+	// get stat from exists dir
+	if (::stat(exists.c_str(), &st)!=0)
+	{
+		return -errno;
+	}
+	res=::mkdir(path_parent.c_str(), st.st_mode);
+	if (res==0)
+	{
+		::chown(path_parent.c_str(), st.st_uid, st.st_gid);
+		::chmod(path_parent.c_str(), st.st_mode);
+	}
+	else
+	{
+		res=-errno;
+	}
+
+#ifndef WITHOUT_XATTR
+        // copy extended attributes of parent dir
+        this->copy_xattrs(exists, path_parent);
+#endif
+
+	return res;
+}
+#ifndef WITHOUT_XATTR
+int Fuse::copy_xattrs(const std::string from, const std::string to)
+{
+        int listsize=0, attrvalsize=0;
+        char *listbuf=NULL, *attrvalbuf=NULL,
+                *name_begin=NULL, *name_end=NULL;
+
+        // if not xattrs on source, then do nothing
+        if ((listsize=::listxattr(from.c_str(), NULL, 0)) == 0)
+                return 0;
+
+        // get all extended attributes
+        listbuf=(char *)calloc(sizeof(char), listsize);
+        if (::listxattr(from.c_str(), listbuf, listsize) == -1)
+        {
+                return -1;
+        }
+
+        // loop through each xattr
+        for(name_begin=listbuf, name_end=listbuf+1;
+                name_end < (listbuf + listsize); name_end++)
+        {
+                // skip the loop if we're not at the end of an attribute name
+                if (*name_end != '\0')
+                        continue;
+
+                // get the size of the extended attribute
+                attrvalsize = ::getxattr(from.c_str(), name_begin, NULL, 0);
+                if (attrvalsize < 0)
+                {
+                        return -1;
+                }
+
+                // get the value of the extended attribute
+                attrvalbuf=(char *)calloc(sizeof(char), attrvalsize);
+                if (::getxattr(from.c_str(), name_begin, attrvalbuf, attrvalsize) < 0)
+                {
+                        return -1;
+                }
+
+                // set the value of the extended attribute on dest file
+                if (::setxattr(to.c_str(), name_begin, attrvalbuf, attrvalsize, 0) < 0)
+                {
+                        return -1;
+                }
+
+                free(attrvalbuf);
+
+                // point the pointer to the start of the attr name to the start
+                // of the next attr
+                name_begin=name_end+1;
+                name_end++;
+        }
+
+        free(listbuf);
+        return 0;
+}
+#endif
+int Fuse::dir_is_empty(const std::string path)
+{
+	DIR * dir = opendir(path.c_str());
+	struct dirent *de;
+	if (!dir)
+		return -1;
+	while((de = ::readdir(dir))) {
+		if (strcmp(de->d_name, ".") == 0) continue;
+		if (strcmp(de->d_name, "..") == 0) continue;
+		::closedir(dir);
+		return 0;
+	}
+
+	::closedir(dir);
+	return 1;
+}
+void Fuse::reopen_files(const std::string file, const std::string newDirectory)
+{
+    std::string newFile = this->concatPath(newDirectory, file);
+    Synchronized syncOpenFiles(this->openFiles);
+
+    openFiles_set::index<of_idx_fuseFile>::type &idx = this->openFiles.get<of_idx_fuseFile>();
+    std::pair<openFiles_set::index<of_idx_fuseFile>::type::iterator,
+              openFiles_set::index<of_idx_fuseFile>::type::iterator> range = idx.equal_range(file);
+
+    openFiles_set::index<of_idx_fuseFile>::type::iterator it;
+    for(it = range.first;range.first!=range.second;it++){
+        off_t seek = lseek(it->fd, 0, SEEK_CUR);
+        int flags = it->flags;
+        int fh;
+
+        flags &= ~(O_EXCL|O_TRUNC);
+
+        // open
+        if ((fh = ::open(newFile.c_str(), flags)) == -1) {
+            it->valid = false;
+            continue;
+        }
+        else
+        {
+            // seek
+            if (seek != lseek(fh, seek, SEEK_SET)) {
+                ::close(fh);
+                it->valid = false;
+                continue;
+            }
+
+            // filehandle
+            if (dup2(fh, it->fd) != it->fd) {
+                ::close(fh);
+                it->valid = false;
+                continue;
+            }
+            // close temporary filehandle
+            ::close(fh);
+        }
+
+        range.first->path = newDirectory;
+    }
+}
+
+void Fuse::move_file(int fd, std::string file, std::string directory, fsblkcnt_t wsize)
+{
+	char *buf = NULL;
+	ssize_t size;
+	FILE *input = NULL, *output = NULL;
+	struct utimbuf ftime = {0};
+	fsblkcnt_t space;
+	struct stat st;
+
+    std::string maxSpaceDir = this->getMaxFreeSpaceDir(&space);
+    if(space<wsize || directory == maxSpaceDir){
+        throw std::runtime_error("not enough space");
+    }
+
+	/* get file size */
+	if (fstat(fd, &st) != 0) {
+        throw std::runtime_error("fstat failed");
+	}
+
+    /* Hard link support is limited to a single device, and files with
+       >1 hardlinks cannot be moved between devices since this would
+       (a) result in partial files on the source device (b) not free
+       the space from the source device during unlink. */
+	if (st.st_nlink > 1) {
+        errno = ENOTSUP;
+        throw std::runtime_error("cannot move file with hard links");
+	}
+
+    this->create_parent_dirs(maxSpaceDir, file);
+
+    std::string from = this->concatPath(directory, file);
+    std::string to = this->concatPath(maxSpaceDir, file);
+
+    // in case fd is not open for reading - just open a new file pointer
+	if (!(input = fopen(from.c_str(), "r")))
+		throw std::runtime_error("open file for reading failed");
+
+	if (!(output = fopen(to.c_str(), "w+"))) {
+        ::fclose(input);
+        throw std::runtime_error("open file for writing failed");
+	}
+    
+    int inputfd = fileno(input);
+    int outputfd = fileno(output);
+
+	// move data
+    uint32_t allocationSize = 16*1024*1024; // 16 megabyte
+    buf = NULL;
+    do{
+        try{
+            buf = new char[allocationSize];
+            break;
+        }catch(...){
+            allocationSize/=2;  // reduce allocation size at max to filesystem block size
+        }
+    }while(allocationSize>=st.st_blksize || allocationSize>=4096);
+    if(buf==NULL){
+        errno = ENOMEM;
+        ::fclose(input);
+        ::fclose(output);
+        ::unlink(to.c_str());
+        throw std::runtime_error("not enough memory");
+    }
+
+	while((size = ::read(inputfd, buf, sizeof(char)*allocationSize))>0) {
+        ssize_t written = 0;
+        while(written<=size){
+            size_t bytesWritten = ::write(outputfd, buf+written, sizeof(char)*(size-written));
+            if(bytesWritten>0){
+                written += bytesWritten;
+            }
+            else{
+                ::fclose(input);
+                ::fclose(output);
+                delete[] buf;
+                ::unlink(to.c_str());
+                throw std::runtime_error("moving file failed");
+            }
+        }
+	}
+
+    delete[] buf;
+	if(size==-1){
+        ::fclose(input);
+        ::fclose(output);
+        ::unlink(to.c_str());
+        throw std::runtime_error("read error occured");
+    }
+
+	::fclose(input);
+
+	// owner/group/permissions
+	::fchmod(outputfd, st.st_mode);
+	::fchown(outputfd, st.st_uid, st.st_gid);
+	::fclose(output);
+
+	// time
+	ftime.actime = st.st_atime;
+	ftime.modtime = st.st_mtime;
+	::utime(to.c_str(), &ftime);
+
+#ifndef WITHOUT_XATTR
+        // extended attributes
+        this->copy_xattrs(from, to);
+#endif
+
+    try{
+        Synchronized syncOpenFiles(this->openFiles);
+
+        openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
+        openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
+        if(it!=idx.end()){
+            it->path = maxSpaceDir;  // path is not indexed, thus no need to replace in openFiles
+        }
+    }catch(...){
+        ::unlink(to.c_str());
+        throw std::runtime_error("failed to modify internal data structure");
+    }
+
+    try{
+        this->reopen_files(file, maxSpaceDir);
+        ::unlink(from.c_str());
+    }catch(...){
+        ::unlink(to.c_str());
+        throw std::runtime_error("failed to reopen already open files");
+    }
 }
 
 void* Fuse::op_init(struct fuse_conn_info *conn){
@@ -350,61 +711,70 @@ int Fuse::op_readlink(const std::string path, char *buf, size_t size)
     catch(...){}
 	return -ENOENT;
 }
-/*
-#define CREATE_FUNCTION 0
-#define OPEN_FUNCION    1
 
-static int mhdd_internal_open(const char *file,
-		mode_t mode, struct fuse_file_info *fi, int what)
+int Fuse::internal_open(const std::string file, mode_t mode, struct fuse_file_info *fi)
 {
-	int dir_id, fd;
-
-	std::string path;
-    struct openFile *add = NULL;
-
-	mhdd_debug(MHDD_INFO, "mhdd_internal_open: %s, flags = 0x%X, fi: %p\n",
-		file, fi->flags, fi);
-
     fi->fh = 0;
 
-	path = find_path(file);
-	if (path.size()) {
-		if (what == CREATE_FUNCTION)
-			fd = open(path.c_str(), fi->flags, mode);
+    try{
+        int fd = 0;
+        std::string usedPath;
+	    std::string path = this->findPath(file, NULL, &usedPath);
+		if (mode != 0)
+			fd = ::open(path.c_str(), fi->flags, mode);
 		else
-			fd = open(path.c_str(), fi->flags);
+			fd = ::open(path.c_str(), fi->flags);
 		if (fd == -1) {
 			return -errno;
 		}
-		add = flist_create(file, path, fi->flags, fd);
+        try{
+            Synchronized syncOpenFiles(this->openFiles);
 
-        if(add==NULL){
+            int *syncToken = NULL;
+            openFiles_set::index<of_idx_fuseFile>::type &idx = this->openFiles.get<of_idx_fuseFile>();
+            openFiles_set::index<of_idx_fuseFile>::type::iterator it = idx.find(path);
+            if(it!=idx.end()){
+                syncToken = it->syncToken;
+            }
+            else{
+                syncToken = new int;
+            }
+
+            struct openFile of = { file, usedPath, fd, fi->flags, syncToken, true};
+            this->openFiles.insert(of);
+        }
+        catch(...){
+            //log boost::current_exception_diagnostic_information()
             if(errno==0){ errno = ENOMEM; }
-            return -errno;
+            int rval = errno;
+            ::close(fd);
+            return -rval;
         }
 
-        fi->fh = reinterpret_cast<uint64_t>(add);
-
-        mhdd_debug(MHDD_INFO, "mhdd_internal_open: file opened %d\n", fi->fh);
-        mhdd_debug(MHDD_DEBUG, "mhdd_open: add->fh: %p:%lld\n", add, add->fh);
+        fi->fh = fd;
 
 		return 0;
-	}
+    }
+    catch(...){
+        //log boost::current_exception_diagnostic_information()
+    }
 
-	mhdd_debug(MHDD_INFO, "mhdd_internal_open: new file %s\n", file);
+    std::string maxFreeDir;
+    try{
+         maxFreeDir = this->getMaxFreeSpaceDir();
+    }
+    catch(...){
+        return -ENOSPC;
+    }
 
-	if ((dir_id = get_free_dir()) < 0) {
-		errno = ENOSPC;
-		return -errno;
-	}
-
-	create_parent_dirs(dir_id, file);
-	path = create_path(mhdd->dirs[dir_id], file);
-
-	if (what == CREATE_FUNCTION)
-		fd = open(path.c_str(), fi->flags, mode);
+	this->create_parent_dirs(maxFreeDir, file);
+	std::string path = this->concatPath(maxFreeDir, file);
+    
+    int fd = -1;
+	if (mode != 0)
+		fd = ::open(path.c_str(), fi->flags, mode);
 	else
-		fd = open(path.c_str(), fi->flags);
+		fd = ::open(path.c_str(), fi->flags);
 
 	if (fd == -1) {
 		return -errno;
@@ -420,140 +790,166 @@ static int mhdd_internal_open(const char *file,
 		fchown(fd, fuse_get_context()->uid, gid);
 	}
 
-    add = flist_create(file, path, fi->flags, fd);
+    try{
+        Synchronized syncOpenFiles(this->openFiles);
 
-    if(add==NULL){
+        int *syncToken = NULL;
+        openFiles_set::index<of_idx_fuseFile>::type &idx = this->openFiles.get<of_idx_fuseFile>();
+        openFiles_set::index<of_idx_fuseFile>::type::iterator it = idx.find(path);
+        if(it!=idx.end()){
+            syncToken = it->syncToken;
+        }
+        else{
+            syncToken = new int;
+        }
+
+        struct openFile of = { file, maxFreeDir, fd, fi->flags, syncToken, true};
+        this->openFiles.insert(of);
+    }
+    catch(...){
+        //log boost::current_exception_diagnostic_information()
         if(errno==0){ errno = ENOMEM; }
+        int rval = errno;
+        ::close(fd);
+        return -rval;
+    }
+
+    fi->fh = fd;
+
+	return 0;
+}
+
+int Fuse::op_create(const std::string file, mode_t mode, struct fuse_file_info *fi)
+{
+    int res = 0;
+	res = this->internal_open(file, mode, fi);
+	return res;
+}
+
+int Fuse::op_open(const std::string file, struct fuse_file_info *fi)
+{
+    int res = 0;
+	res = this->internal_open(file, 0, fi);
+	return res;
+}
+
+int Fuse::op_release(const std::string path, struct fuse_file_info *fi)
+{
+    int fd = fi->fh;
+
+    try{
+        Synchronized syncOpenFiles(this->openFiles);
+        ::close(fd);
+
+        openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
+        openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
+        if(it==idx.end()){
+            throw std::runtime_error("bad descriptor");
+        }
+        int *syncToken = it->syncToken;
+        std::string fuseFile = it->fuseFile;
+        idx.erase(it);
+
+        openFiles_set::index<of_idx_fuseFile>::type &fidx = this->openFiles.get<of_idx_fuseFile>();
+        if(fidx.find(fuseFile)==fidx.end()){
+            delete syncToken;
+        }
+    }catch(...){
+        //log boost::current_exception_diagnostic_information()
+        if(errno==0){ errno = EBADFD; }
         return -errno;
     }
 
-    fi->fh = reinterpret_cast<uint64_t>(add);
-
-    mhdd_debug(MHDD_INFO, "mhdd_internal_open: file opened %d\n", fi->fh);
-    mhdd_debug(MHDD_DEBUG, "mhdd_open: add->fh: %p:%lld\n", add, add->fh);
-
 	return 0;
 }
 
-static int mhdd_create(const char *file,
-		mode_t mode, struct fuse_file_info *fi)
+int Fuse::op_read(const std::string, char *buf, size_t count, off_t offset, struct fuse_file_info *fi)
 {
-    int res = 0;
-	mhdd_debug(MHDD_MSG, "mhdd_create: %s, mode = %X\n", file, fi->flags);
-	res = mhdd_internal_open(file, mode, fi, CREATE_FUNCTION);
-	if (res != 0)
-		mhdd_debug(MHDD_INFO,
-			"mhdd_create: error: %s\n", strerror(-res));
-	return res;
-}
+    int fd = fi->fh;
+    try{
+        Synchronized syncOpenFiles(this->openFiles);
 
-static int mhdd_fileopen(const char *file, struct fuse_file_info *fi)
-{
-    int res = 0;
-	mhdd_debug(MHDD_MSG,
-		"mhdd_fileopen: %s, flags = %04X\n", file, fi->flags);
-	res = mhdd_internal_open(file, 0, fi, OPEN_FUNCION);
-	if (res != 0)
-		mhdd_debug(MHDD_INFO,
-			"mhdd_fileopen: error: %s\n", strerror(-res));
-	return res;
-}
+        openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
+        openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
+        if(it!=idx.end() && it->valid==false){
+            // MISSING: log that the descriptor has been invalidated as the reason of failing
+            errno = EINVAL;
+            return -errno;
+        }
+    }catch(...){}
 
-static int mhdd_release(const char *path, struct fuse_file_info *fi)
-{
-	struct openFile *del = reinterpret_cast<struct openFile *>(fi->fh);
-
-	mhdd_debug(MHDD_MSG, "mhdd_release: %s, handle = %p:%lld\n", path, fi, fi->fh);
-
-    if(!del){
-		mhdd_debug(MHDD_INFO,
-			"mhdd_release: unknown file number: %llu\n", fi->fh);
-		errno = EBADF;
-
-		return -errno;
-    }
-
-    mhdd_debug(MHDD_DEBUG, "mhdd_release: release: %p\n", del);
-    mhdd_debug(MHDD_DEBUG, "mhdd_release: release->fh: %lld\n", del->fh);
-
-	close(del->fh);
-
-    flist_delete(del);
-
-	return 0;
-}
-
-static int mhdd_read(const char *path, char *buf, size_t count, off_t offset,
-		struct fuse_file_info *fi)
-{
 	ssize_t res;
-	struct openFile *info = reinterpret_cast<struct openFile *>(fi->fh);
-
-	mhdd_debug(MHDD_INFO, "mhdd_read: %s, offset = %lld, count = %lld, handle: %p:%lld\n",
-			path,
-			offset,
-			count,
-            fi, fi->fh
-		  );
-
-    mhdd_debug(MHDD_DEBUG, "mhdd_read: openFile: %p:%d\n", info, info->fh);
-
-	res = pread(info->fh, buf, count, offset);
+	res = pread(fd, buf, count, offset);
 
 	if (res == -1)
 		return -errno;
 	return res;
 }
 
-static int mhdd_write(const char *path, const char *buf, size_t count,
-		off_t offset, struct fuse_file_info *fi)
+int Fuse::op_write(const std::string file, const char *buf, size_t count, off_t offset, struct fuse_file_info *fi)
 {
 	ssize_t res;
-	struct openFile *info = reinterpret_cast<struct openFile *>(fi->fh);
-    std::string realNameFirst, realNameSecond;
+    int fd = fi->fh;
+    try{
+        Synchronized syncOpenFiles(this->openFiles);
 
-	mhdd_debug(MHDD_INFO, "mhdd_write: %s, handle = %lld\n", path, fi->fh);
+        openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
+        openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
+        if(it!=idx.end() && it->valid==false){
+            // MISSING: log that the descriptor has been invalidated as the reason of failing
+            errno = EINVAL;
+            return -errno;
+        }
+    }catch(...){}
 
-    Lock openFilesLock(info->parent->lock);
-    openFilesLock.rdlock();
+    int *syncToken = NULL;
+    std::string path;
 
-    realNameFirst = info->parent->real_name;
+    try{
+        Synchronized syncOpenFiles(this->openFiles);
 
-	res = pwrite(info->fh, buf, count, offset);
+        openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
+        openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
+        if(it==idx.end()){
+            errno = EBADFD;
+            return -errno;
+        }
+        syncToken = it->syncToken;
+        path = it->path;
+    }catch(...){
+        //log boost::current_exception_diagnostic_information()
+        if(errno==0){ errno = EBADFD; }
+        return -errno;
+    }
+
+    Synchronized sync(syncToken);
+
+	res = ::pwrite(fd, buf, count, offset);
 	if ((res == (ssize_t)count) || (res == -1 && errno != ENOSPC)) {
 		if (res == -1) {
-			mhdd_debug(MHDD_DEBUG,
-				"mhdd_write: error write %s: %s\n",
-				info->parent->real_name.c_str(), strerror(errno));
 			return -errno;
 		}
 		return res;
 	}
 
-	// end free space
-    openFilesLock.wrlock();
+    struct stat st;
+    fstat(fd, &st);
 
-    realNameSecond = info->parent->real_name;
-    if(realNameFirst==realNameSecond){  // if the real file didnt change during requesting write uplock
-        res  = move_file(info, offset + count);
+    // write failed, cause of no space left
+    errno = ENOSPC;
+    try{
+        this->move_file(fd, file, path, (off_t)(offset+count) > st.st_size ? offset+count : st.st_size);
+    }catch(...){
+        return -errno;
     }
-    openFilesLock.unlock();
 
 	if (res == 0) {
-        res = pwrite(info->fh, buf, count, offset);
+        res = ::pwrite(fd, buf, count, offset);
 
 		if (res == -1) {
-			mhdd_debug(MHDD_DEBUG,
-				"mhdd_write: error restart write: %s\n",
-				strerror(errno));
 			return -errno;
 		}
-		if (res < (ssize_t)count) {
-			mhdd_debug(MHDD_DEBUG,
-				"mhdd_write: error (re)write file %s %s\n",
-				info->parent->real_name.c_str(),
-				strerror(ENOSPC));
-		}
+
 		return res;
 	}
 	errno = ENOSPC;
@@ -561,151 +957,151 @@ static int mhdd_write(const char *path, const char *buf, size_t count,
 	return -errno;
 }
 
-static int mhdd_truncate(const char *path, off_t size)
+int Fuse::op_truncate(const std::string path, off_t size)
 {
-	std::string file = find_path(path);
-	mhdd_debug(MHDD_MSG, "mhdd_truncate: %s\n", path);
-	if (file.size()) {
-		int res = truncate(file.c_str(), size);
+    try{
+        std::string file = this->findPath(path);
+        int res = ::truncate(file.c_str(), size);
 
 		if (res == -1)
 			return -errno;
 		return 0;
-	}
-	errno = ENOENT;
-	return -errno;
+    }catch(...){}
+    errno = ENOENT;
+    return -errno;
 }
-
-static int mhdd_ftruncate(const char *path, off_t size,
-		struct fuse_file_info *fi)
+int Fuse::op_ftruncate(const std::string path, off_t size, struct fuse_file_info *fi)
 {
-	int res;
-	struct openFile *info = reinterpret_cast<struct openFile *>(fi->fh);
+    int fd = fi->fh;
+    try{
+        Synchronized syncOpenFiles(this->openFiles);
 
-	mhdd_debug(MHDD_MSG,
-		"mhdd_ftruncate: %s, handle = %lld\n", path, fi->fh);
+        openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
+        openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
+        if(it!=idx.end() && it->valid==false){
+            // MISSING: log that the descriptor has been invalidated as the reason of failing
+            errno = EINVAL;
+            return -errno;
+        }
+    }catch(...){}
 
-	res = ftruncate(info->fh, size);
-
-	if (res == -1)
+	if (::ftruncate(fd, size) == -1)
 		return -errno;
 	return 0;
 }
 
-static int mhdd_access(const char *path, int mask)
+int Fuse::op_access(const std::string path, int mask)
 {
-	mhdd_debug(MHDD_MSG, "mhdd_access: %s mode = %04X\n", path, mask);
-	std::string file = find_path(path);
-	if (file.size()) {
-		int res = access(file.c_str(), mask);
+    try{
+        std::string file = this->findPath(path);
+        int res = ::access(file.c_str(), mask);
 
 		if (res == -1)
 			return -errno;
 		return 0;
-	}
-
-	errno = ENOENT;
-	return -errno;
+    }catch(...){}
+    errno = ENOENT;
+    return -errno;
 }
 
-static int mhdd_mkdir(const char * path, mode_t mode)
+int Fuse::op_mkdir(const std::string path, mode_t mode)
 {
-    int dir_id = 0;
+    try{
+        this->findPath(path);
+        errno = EEXIST;
+        return -errno;
+    }catch(...){}
 
-	mhdd_debug(MHDD_MSG, "mhdd_mkdir: %s mode = %04X\n", path, mode);
+	std::string parent;
+    try{
+        parent = this->get_parent_path(path);
+        this->findPath(parent);
+    }
+    catch(...){
+        errno = EFAULT;
+        return -errno;
+    }
 
-	if (find_path_id(path) != -1) {
-		errno = EEXIST;
-		return -errno;
-	}
-
-	std::string parent = get_parent_path(path);
-	if (parent.size() == 0) {
-		errno = EFAULT;
-		return -errno;
-	}
-
-	if (find_path_id(parent) == -1) {
-		errno = EFAULT;
-		return -errno;
-	}
-
-	dir_id = get_free_dir();
-	if (dir_id<0) {
+    std::string dir;
+    try{
+        dir = this->getMaxFreeSpaceDir();
+    }
+    catch(...){
 		errno = ENOSPC;
 		return -errno;
-	}
+    }
 
-	create_parent_dirs(dir_id, path);
-	std::string name = create_path(mhdd->dirs[dir_id], path);
-	if (mkdir(name.c_str(), mode) == 0) {
+    this->create_parent_dirs(dir, path);
+	std::string name = this->concatPath(dir, path);
+	if (::mkdir(name.c_str(), mode) == 0) {
 		if (getuid() == 0) {
 			struct stat st;
 			gid_t gid = fuse_get_context()->gid;
-			if (lstat(name.c_str(), &st) == 0) {
+			if (::lstat(name.c_str(), &st) == 0) {
 				// parent directory is SGID'ed
 				if (st.st_gid != getgid())
 					gid = st.st_gid;
 			}
-			chown(name.c_str(), fuse_get_context()->uid, gid);
+			::chown(name.c_str(), fuse_get_context()->uid, gid);
 		}
 		return 0;
 	}
 
 	return -errno;
 }
-
-static int mhdd_rmdir(const char * path)
+int Fuse::op_rmdir(const std::string path)
 {
     std::string dir;
     int res = 0;
 
-	mhdd_debug(MHDD_MSG, "mhdd_rmdir: %s\n", path);
-	
-	while((dir = find_path(path)).size()) {
-		res = rmdir(dir.c_str());
-		if (res == -1) return -errno;
-	}
+    try{
+        while(true) {
+            dir = this->findPath(path);
+            res = ::rmdir(dir.c_str());
+            if (res == -1) return -errno;
+        }
+    }catch(...){}
+
 	return 0;
 }
 
-static int mhdd_unlink(const char *path)
+int Fuse::op_unlink(const std::string path)
 {
     int res = 0;
 
-	mhdd_debug(MHDD_MSG, "mhdd_unlink: %s\n", path);
-	std::string file = find_path(path);
-	if (file.size() == 0) {
+    try{
+	    std::string file = this->findPath(path);
+        res = ::unlink(file.c_str());
+    }catch(...){
 		errno = ENOENT;
 		return -errno;
-	}
-	res = unlink(file.c_str());
+    }
 
 	if (res == -1) return -errno;
 	return 0;
 }
 
-static int mhdd_rename(const char *from, const char *to)
+int Fuse::op_rename(const std::string from, const std::string to)
 {
-	size_t i;
     int res;
 	struct stat sto, sfrom;
 	int from_is_dir = 0, to_is_dir = 0, from_is_file = 0, to_is_file = 0;
 	int to_dir_is_empty = 1;
 
-	mhdd_debug(MHDD_MSG, "mhdd_rename: from = %s to = %s\n", from, to);
-
-	if (strcmp(from, to) == 0)
+	if (from == to)
 		return 0;
 
+	std::vector<std::string> &directories = this->config->option<std::vector<std::string> >("directories");
+	Synchronized sDirs(directories, Synchronized::LockType::READ);
+
 	// seek for possible errors
-    for (i = 0; i < mhdd->dirs.size(); i++) {
-		std::string obj_to   = create_path(mhdd->dirs[i], to);
-		std::string obj_from = create_path(mhdd->dirs[i], from);
+    for (size_t i = 0; i < directories.size(); i++) {
+		std::string obj_to   = this->concatPath(directories[i], to);
+		std::string obj_from = this->concatPath(directories[i], from);
 		if (stat(obj_to.c_str(), &sto) == 0) {
 			if (S_ISDIR(sto.st_mode)) {
 				to_is_dir++;
-				if (!dir_is_empty(obj_to))
+				if (!this->dir_is_empty(obj_to))
 					to_dir_is_empty = 0;
 			}
 			else
@@ -727,16 +1123,20 @@ static int mhdd_rename(const char *from, const char *to)
 	}
 
 	// parent 'to' path doesn't exists
-	std::string pto = get_parent_path (to);
-	if (find_path_id(pto) == -1) {
-		return -ENOENT;
-	}
+	std::string pto = this->get_parent_path(to);
+    try{
+        this->findPath(pto);
+    }
+    catch(...){
+        return -ENOENT;
+    }
 
 	// rename cycle
-	for (i = 0; i < mhdd->dirs.size(); i++) {
-		std::string obj_to   = create_path(mhdd->dirs[i], to);
-		std::string obj_from = create_path(mhdd->dirs[i], from);
-		if (stat(obj_from.c_str(), &sfrom) == 0) {
+	for (size_t i = 0; i < directories.size(); i++) {
+		std::string obj_to   = this->concatPath(directories[i], to);
+		std::string obj_from = this->concatPath(directories[i], from);
+
+		if (::stat(obj_from.c_str(), &sfrom) == 0) {
 			// if from is dir and at the same time file, we only rename dir
 			if (from_is_dir && from_is_file) {
 				if (!S_ISDIR(sfrom.st_mode)) {
@@ -744,22 +1144,17 @@ static int mhdd_rename(const char *from, const char *to)
 				}
 			}
 
-			create_parent_dirs(i, to);
+			this->create_parent_dirs(directories[i], to);
 
-			mhdd_debug(MHDD_MSG, "mhdd_rename: rename %s -> %s\n",
-				obj_from.c_str(), obj_to.c_str());
-			res = rename(obj_from.c_str(), obj_to.c_str());
+			res = ::rename(obj_from.c_str(), obj_to.c_str());
 			if (res == -1) {
 				return -errno;
 			}
 		} else {
 			// from and to are files, so we must remove to files
 			if (from_is_file && to_is_file && !from_is_dir) {
-				if (stat(obj_to.c_str(), &sto) == 0) {
-					mhdd_debug(MHDD_MSG,
-						"mhdd_rename: unlink %s\n",
-						obj_to.c_str());
-					if (unlink(obj_to.c_str()) == -1) {
+				if (::stat(obj_to.c_str(), &sto) == 0) {
+					if (::unlink(obj_to.c_str()) == -1) {
 						return -errno;
 					}
 				}
@@ -771,17 +1166,19 @@ static int mhdd_rename(const char *from, const char *to)
 	return 0;
 }
 
-static int mhdd_utimens(const char *path, const struct timespec ts[2])
+int Fuse::op_utimens(const std::string path, const struct timespec ts[2])
 {
 	size_t i, flag_found;
     int res;
     struct timeval tv[2];
     struct stat st;
-	mhdd_debug(MHDD_MSG, "mhdd_utimens: %s\n", path);
 
-    for (flag_found = i = 0; i < mhdd->dirs.size(); i++) {
-		std::string object = create_path(mhdd->dirs[i], path);
-		if (lstat(object.c_str(), &st) != 0) {
+	std::vector<std::string> &directories = this->config->option<std::vector<std::string> >("directories");
+	Synchronized sDirs(directories, Synchronized::LockType::READ);
+
+    for (flag_found = i = 0; i < directories.size(); i++) {
+		std::string object = this->concatPath(directories[i], path);
+		if (::lstat(object.c_str(), &st) != 0) {
 			continue;
 		}
 
@@ -792,7 +1189,7 @@ static int mhdd_utimens(const char *path, const struct timespec ts[2])
 		tv[1].tv_sec = ts[1].tv_sec;
 		tv[1].tv_usec = ts[1].tv_nsec / 1000;
 
-		res = lutimes(object.c_str(), tv);
+		res = ::lutimes(object.c_str(), tv);
 
 		if (res == -1)
 			return -errno;
@@ -803,48 +1200,24 @@ static int mhdd_utimens(const char *path, const struct timespec ts[2])
 	return -errno;
 }
 
-static int mhdd_chmod(const char *path, mode_t mode)
-{
-	size_t i, flag_found;
-    int res;
-    struct stat st;
-	mhdd_debug(MHDD_MSG, "mhdd_chmod: mode = 0x%03X %s\n", mode, path);
-
-    for (flag_found = i = 0; i < mhdd->dirs.size(); i++) {
-		std::string object = create_path(mhdd->dirs[i], path);
-		if (lstat(object.c_str(), &st) != 0) {
-			continue;
-		}
-
-		flag_found = 1;
-		res = chmod(object.c_str(), mode);
-
-		if (res == -1)
-			return -errno;
-	}
-	if (flag_found)
-		return 0;
-	errno = ENOENT;
-	return -errno;
-}
-
-static int mhdd_chown(const char *path, uid_t uid, gid_t gid)
+int Fuse::op_chmod(const std::string path, mode_t mode)
 {
 	size_t i, flag_found;
     int res;
     struct stat st;
 
-	mhdd_debug(MHDD_MSG,
-		"mhdd_chown: pid = 0x%03X gid = %03X %s\n", uid, gid, path);
+	std::vector<std::string> &directories = this->config->option<std::vector<std::string> >("directories");
+	Synchronized sDirs(directories, Synchronized::LockType::READ);
 
-    for (flag_found = i = 0; i < mhdd->dirs.size(); i++) {
-		std::string object = create_path(mhdd->dirs[i], path);
-		if (lstat(object.c_str(), &st) != 0) {
+    for (flag_found = i = 0; i < directories.size(); i++) {
+		std::string object = this->concatPath(directories[i], path);
+		if (::lstat(object.c_str(), &st) != 0) {
 			continue;
 		}
 
 		flag_found = 1;
-		res = lchown(object.c_str(), uid, gid);
+		res = ::chmod(object.c_str(), mode);
+
 		if (res == -1)
 			return -errno;
 	}
@@ -854,37 +1227,60 @@ static int mhdd_chown(const char *path, uid_t uid, gid_t gid)
 	return -errno;
 }
 
-static int mhdd_symlink(const char *from, const char *to)
+int Fuse::op_chown(const std::string path, uid_t uid, gid_t gid)
 {
-	int i, res, dir_id;
-	mhdd_debug(MHDD_MSG, "mhdd_symlink: from = %s to = %s\n", from, to);
+	size_t i, flag_found;
+    int res;
+    struct stat st;
 
-	std::string parent = get_parent_path(to);
-	if (parent.size() == 0) {
-		errno = ENOENT;
-		return -errno;
+	std::vector<std::string> &directories = this->config->option<std::vector<std::string> >("directories");
+	Synchronized sDirs(directories, Synchronized::LockType::READ);
+
+    for (flag_found = i = 0; i < directories.size(); i++) {
+		std::string object = this->concatPath(directories[i], path);
+		if (::lstat(object.c_str(), &st) != 0) {
+			continue;
+		}
+
+		flag_found = 1;
+		res = ::lchown(object.c_str(), uid, gid);
+		if (res == -1)
+			return -errno;
 	}
+	if (flag_found)
+		return 0;
+	errno = ENOENT;
+	return -errno;
+}
 
-	dir_id = find_path_id(parent);
-
-	if (dir_id == -1) {
-		errno = ENOENT;
+int Fuse::op_symlink(const std::string from, const std::string to)
+{
+	int i, res;
+    
+    std::string parent, directory;
+    try{
+        parent = this->get_parent_path(to);
+        directory = this->findPath(parent);
+    }catch(...){
+        errno = ENOENT;
 		return -errno;
-	}
+    }
 
 	for (i = 0; i < 2; i++) {
 		if (i) {
-			if ((dir_id = get_free_dir()) < 0) {
+            try{
+			    directory = this->getMaxFreeSpaceDir();
+            }catch(...){
 				errno = ENOSPC;
 				return -errno;
 			}
 
-			create_parent_dirs(dir_id, to);
+			this->create_parent_dirs(directory, to);
 		}
 
-		std::string path_to = create_path(mhdd->dirs[dir_id], to);
+		std::string path_to = this->concatPath(directory, to);
 
-		res = symlink(from, path_to.c_str());
+		res = symlink(from.c_str(), path_to.c_str());
 
 		if (res == 0)
 			return 0;
@@ -894,75 +1290,73 @@ static int mhdd_symlink(const char *from, const char *to)
 	return -errno;
 }
 
-static int mhdd_link(const char *from, const char *to)
+int Fuse::op_link(const std::string from, const std::string to)
 {
-    int dir_id = 0, res = 0;
-	mhdd_debug(MHDD_MSG, "mhdd_link: from = %s to = %s\n", from, to);
+    int res = 0;
+    std::string directory;
 
-	dir_id = find_path_id(from);
-
-	if (dir_id == -1) {
+    try{
+        directory = this->findPath(from);
+    }catch(...){
 		errno = ENOENT;
 		return -errno;
-	}
+    }
 
-	res = create_parent_dirs(dir_id, to);
+	res = this->create_parent_dirs(directory, to);
 	if (res != 0) {
 		return res;
 	}
 
-	std::string path_from = create_path(mhdd->dirs[dir_id], from);
-	std::string path_to = create_path(mhdd->dirs[dir_id], to);
+	std::string path_from = this->concatPath(directory, from);
+	std::string path_to = this->concatPath(directory, to);
 
-	res = link(path_from.c_str(), path_to.c_str());
+	res = ::link(path_from.c_str(), path_to.c_str());
 
 	if (res == 0)
 		return 0;
 	return -errno;
 }
 
-static int mhdd_mknod(const char *path, mode_t mode, dev_t rdev)
+int Fuse::op_mknod(const std::string path, mode_t mode, dev_t rdev)
 {
-	int res, i, dir_id;
+	int res, i;
     struct fuse_context * fcontext = NULL;
 
-	mhdd_debug(MHDD_MSG, "mhdd_mknod: path = %s mode = %X\n", path, mode);
-    std::string parent = get_parent_path(path);
-	if (parent.size() == 0) {
-		errno = ENOENT;
+    std::string parent, directory;
+    try{
+        parent = this->get_parent_path(path);
+        directory = this->findPath(parent);
+    }catch(...){
+        errno = ENOENT;
 		return -errno;
-	}
-
-	dir_id = find_path_id(parent);
-
-	if (dir_id == -1) {
-		errno = ENOENT;
-		return -errno;
-	}
+    }
 
 	for (i = 0; i < 2; i++) {
 		if (i) {
-			if ((dir_id = get_free_dir())<0) {
+            try{
+                directory = this->getMaxFreeSpaceDir();
+            }catch(...){
 				errno = ENOSPC;
 				return -errno;
-			}
-			create_parent_dirs(dir_id, path);
+            }
+
+			this->create_parent_dirs(directory, path);
 		}
-		std::string nod = create_path(mhdd->dirs[dir_id], path);
+		std::string nod = this->concatPath(directory, path);
 
 		if (S_ISREG(mode)) {
-			res = open(nod.c_str(), O_CREAT | O_EXCL | O_WRONLY, mode);
+			res = ::open(nod.c_str(), O_CREAT | O_EXCL | O_WRONLY, mode);
 			if (res >= 0)
 				res = close(res);
 		} else if (S_ISFIFO(mode))
-			res = mkfifo(nod.c_str(), mode);
+			res = ::mkfifo(nod.c_str(), mode);
 		else
-			res = mknod(nod.c_str(), mode, rdev);
+			res = ::mknod(nod.c_str(), mode, rdev);
 
 		if (res != -1) {
-			if (getuid() == 0) {
+			if (::getuid() == 0) {
 				fcontext = fuse_get_context();
-				chown(nod.c_str(), fcontext->uid, fcontext->gid);
+				::chown(nod.c_str(), fcontext->uid, fcontext->gid);
 			}
 
 			return 0;
@@ -980,27 +1374,34 @@ static int mhdd_mknod(const char *path, mode_t mode, dev_t rdev)
 #define HAVE_FDATASYNC 1
 #endif
 
-static int mhdd_fsync(const char *path, int isdatasync,
-		struct fuse_file_info *fi)
+int Fuse::op_fsync(const std::string path, int isdatasync, struct fuse_file_info *fi)
 {
-	struct openFile *info = reinterpret_cast<struct openFile *>(fi->fh);;
-    int res;
+    int fd = fi->fh;
+    try{
+        Synchronized syncOpenFiles(this->openFiles);
 
-	mhdd_debug(MHDD_MSG,
-		"mhdd_fsync: path = %s handle = %llu\n", path, fi->fh);
+        openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
+        openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
+        if(it!=idx.end() && it->valid==false){
+            // MISSING: log that the descriptor has been invalidated as the reason of failing
+            errno = EINVAL;
+            return -errno;
+        }
+    }catch(...){}
+
+    int res = 0;
 
 #ifdef HAVE_FDATASYNC
 	if (isdatasync)
-		res = fdatasync(info->fh);
+		res = ::fdatasync(fd);
 	else
 #endif
-		res = fsync(info->fh);
+		res = ::fsync(fd);
 
 	if (res == -1)
 		return -errno;
 	return 0;
 }
-*/
 
 #ifndef WITHOUT_XATTR
 int Fuse::op_setxattr(const std::string file_name, const std::string attrname,
@@ -1089,9 +1490,107 @@ int Fuse::readdir(const char *dirname, void *buf, fuse_fill_dir_t filler,
 int Fuse::readlink(const char *path, char *buf, size_t size){
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_readlink(path, buf, size);    
+    return instance->op_readlink(path, buf, size);
 }
 
+int Fuse::create(const char *file, mode_t mode, struct fuse_file_info *fi)
+{
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_create(file, mode, fi);
+}
+int Fuse::open(const char *file, struct fuse_file_info *fi)
+{
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_open(file, fi);
+}
+int Fuse::release(const char *path, struct fuse_file_info *fi)
+{
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_open(path, fi);
+}
+int Fuse::read(const char *path, char *buf, size_t count, off_t offset, struct fuse_file_info *fi){
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_read(path, buf, count, offset, fi);
+}
+int Fuse::write(const char *file, const char *buf, size_t count, off_t offset, struct fuse_file_info *fi){
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_write(file, buf, count, offset, fi);
+}
+int Fuse::truncate(const char *path, off_t size){
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_truncate(path, size);
+}
+int Fuse::ftruncate(const char *path, off_t size, struct fuse_file_info *fi){
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_ftruncate(path, size, fi);
+}
+int Fuse::access(const char *path, int mask){
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_access(path, mask);
+}
+int Fuse::mkdir(const char *path, mode_t mode){
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_mkdir(path, mode);
+}
+int Fuse::rmdir(const char *path){
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_rmdir(path);
+}
+int Fuse::unlink(const char *path){
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_unlink(path);
+}
+int Fuse::rename(const char *from, const char *to){
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_rename(from, to);
+}
+int Fuse::utimens(const char *path, const struct timespec ts[2]){
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_utimens(path, ts);
+}
+int Fuse::chmod(const char *path, mode_t mode){
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_chmod(path, mode);
+}
+int Fuse::chown(const char *path, uid_t uid, gid_t gid){
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_chown(path, uid, gid);
+}
+int Fuse::symlink(const char *from, const char *to){
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_symlink(from, to);
+}
+int Fuse::link(const char *from, const char *to){
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_link(from, to);
+}
+int Fuse::mknod(const char *path, mode_t mode, dev_t rdev){
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_mknod(path, mode, rdev);
+}
+int Fuse::fsync(const char *path, int isdatasync, struct fuse_file_info *fi){
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_fsync(path, isdatasync, fi);
+}
 
 int Fuse::setxattr(const char *path, const char *attrname,
 					const char *attrval, size_t attrvalsize, int flags){

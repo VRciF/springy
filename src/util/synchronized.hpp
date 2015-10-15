@@ -23,6 +23,9 @@
  *   you can use static member's like
  *   c++: void fooBar(){ Synchronized functionLock(__func__); }
  *
+ * Changelog:
+ *   2015-10-15 added deadlock detection
+ * 
  * License:
 java like synchronized(){} keyword for c++
 Copyright (c) 2015, (VRciF, vrcif0@gmail.com). All rights reserved.
@@ -51,9 +54,11 @@ License along with this library.
 #include <condition_variable>
 #include <thread>
 #include <chrono>
-#else
-#include <map>
+#include <exception>
 #endif
+
+#include <map>
+
 #include <pthread.h>
 #include <iostream>
 #include <stdexcept>
@@ -68,6 +73,12 @@ class Synchronized{
     protected:
         LockType ltype;
 
+#if __cplusplus > 199711L
+        typedef std::multimap<std::thread::id, LockType> t_lockmap;
+#else
+        typedef std::multimap<pthread_id_np_t, LockType> t_lockmap;
+#endif
+
         typedef struct metaMutex{
             pthread_rwlock_t rwlock;
             
@@ -75,12 +86,12 @@ class Synchronized{
             std::unique_lock<std::mutex> ulock;
             std::mutex lock;
             std::condition_variable cond;
+            t_lockmap lockingThreads;
 #else
             pthread_mutex_t lock;
             pthread_cond_t cond;
+            t_lockmap lockingThreads;
 #endif
-
-            int counter;
         } metaMutex;
 
 
@@ -109,7 +120,7 @@ class Synchronized{
         const void *accessPtr;
         metaMutex *metaPtr;
         int dereference;
-        
+
         template<typename T>
         T * getAccessPtr(T & obj) { return &obj; } //turn reference into pointer!
         template<typename T>
@@ -117,13 +128,12 @@ class Synchronized{
 
 public:
         template<typename T>
-        Synchronized(const T &ptr, LockType ltype = LockType::WRITE) : accessPtr(getAccessPtr(ptr)){
+        Synchronized(const T &ptr, LockType ltype = LockType::WRITE) : ltype(ltype),accessPtr(getAccessPtr(ptr)){
             //std::cout << "type: " << typeid(ptr).name() << std::endl;
 
             if(this->accessPtr==NULL){
                 throw std::runtime_error(std::string("Synchronizing on NULL pointer is not valid, referenced type is: ")+typeid(ptr).name());
             }
-            this->ltype = ltype;
 
 #if __cplusplus > 199711L
             {
@@ -134,15 +144,23 @@ public:
 
                 if(it != mmap.end()){
                     this->metaPtr = it->second;
-                    this->metaPtr->counter++;
+
+                    std::pair<t_lockmap::iterator, t_lockmap::iterator> range = this->metaPtr->lockingThreads.equal_range(std::this_thread::get_id());
+                    for(;range.first!=range.second;range.first++){
+                        if(range.first->second == LockType::WRITE || ltype==LockType::WRITE){
+                            throw std::runtime_error(std::string("deadlock detected"));
+                        }
+                    }
+                    this->metaPtr->lockingThreads.insert(std::make_pair(std::this_thread::get_id(), ltype));
                 }
                 else{
                     this->metaPtr = new metaMutex();
+                    pthread_rwlock_init(&this->metaPtr->rwlock, NULL);
+
                     this->metaPtr->ulock = std::unique_lock<std::mutex>(this->metaPtr->lock);
-                    this->metaPtr->counter = 1;
+                    this->metaPtr->lockingThreads.insert(std::make_pair(std::this_thread::get_id(), ltype));
                     mmap.insert(std::make_pair(this->accessPtr, this->metaPtr));
                 }
-
             }
             
 #else
@@ -153,14 +171,21 @@ public:
 
             if(it != mmap.end()){
                 this->metaPtr = it->second;
-                this->metaPtr->counter++;
+
+                std::pair<t_lockmap::iterator, t_lockmap::iterator> range = this->metaPtr->lockingThreads.equal_range(pthread_getthreadid_np());
+                for(;range.first!=range.second;range.first++){
+                    if(range.first->second == LockType::WRITE || ltype==LockType::WRITE){
+                        throw std::runtime_error(std::string("deadlock detected"));
+                    }
+                }
+                this->metaPtr->lockingThreads.insert(std::make_pair(pthread_getthreadid_np(), ltype));
             }
             else{
                 this->metaPtr = new metaMutex();
                 pthread_rwlock_init(&this->metaPtr->rwlock, NULL);
                 pthread_mutex_init(&this->metaPtr->lock, NULL);
                 pthread_cond_init(&this->metaPtr->cond, NULL);
-                this->metaPtr->counter = 1;
+                this->metaPtr->lockingThreads.insert(std::make_pair(pthread_getthreadid_np(), ltype));
                 mmap.insert(std::make_pair(this->accessPtr, this->metaPtr));
             }
 
@@ -190,11 +215,15 @@ public:
             {
 #if __cplusplus > 199711L
                 std::lock_guard<std::mutex> lockMapMutex(this->getMutex());
+                t_lockmap::iterator it = metaPtr->lockingThreads.find(std::this_thread::get_id());
 #else
                 pthread_mutex_lock(&this->getMutex());
+                t_lockmap::iterator it = metaPtr->lockingThreads.find(pthread_getthreadid_np());
 #endif
-                metaPtr->counter--;
-                if(metaPtr->counter<=0){
+                if(it!=metaPtr->lockingThreads.end()){
+                    metaPtr->lockingThreads.erase(it);
+                }
+                if(metaPtr->lockingThreads.size()<=0){  // if none holds lock any more - free resources
                     this->getMutexMap().erase(this->accessPtr);
                     delete this->metaPtr;
                 }
@@ -213,18 +242,37 @@ public:
 #endif
 
         void wait(unsigned long milliseconds=0, unsigned int nanos=0){
+            // keep in mind: it's not possible that the exact same thread call's wait concurrently
+            // thus there is no need to think about deadlock's here - but we need to make sure
+            // that rwlock will hold the exact same lock as before
+
             pthread_rwlock_unlock(&this->metaPtr->rwlock);
 #if __cplusplus > 199711L
-            this->metaPtr->lock.lock();
-            
-            if(milliseconds==0 && nanos==0){
-                this->metaPtr->cond.wait(this->metaPtr->ulock);
+            std::exception_ptr eptr;
+            try{
+                this->metaPtr->lock.lock();
+
+                if(milliseconds==0 && nanos==0){
+                    this->metaPtr->cond.wait(this->metaPtr->ulock);
+                }
+                else{
+                    this->metaPtr->cond.wait_for(this->metaPtr->ulock, std::chrono::milliseconds(milliseconds) + std::chrono::nanoseconds(nanos));
+                }
+
+                this->metaPtr->lock.unlock();
+            }catch(...){
+                eptr = std::current_exception();
+            }
+            if(this->ltype == LockType::WRITE){
+                pthread_rwlock_wrlock(&this->metaPtr->rwlock);
             }
             else{
-                this->metaPtr->cond.wait_for(this->metaPtr->ulock, std::chrono::milliseconds(milliseconds) + std::chrono::nanoseconds(nanos));
+                pthread_rwlock_rdlock(&this->metaPtr->rwlock);
             }
-            
-            this->metaPtr->lock.unlock();
+
+            if(eptr){
+                std::rethrow_exception(eptr);
+            }
 #else
             pthread_mutex_lock(&this->metaPtr->lock);
             int rval = 0;
@@ -249,18 +297,19 @@ public:
                 rval = pthread_cond_timedwait(&this->metaPtr->cond, &this->metaPtr->lock, &timeUntilToWait);
             }
             pthread_mutex_unlock(&this->metaPtr->lock);
-            switch(rval){
-                case 0: break;
-                case EINVAL: throw std::runtime_error("invalid time or condition or mutex given");
-                case EPERM: throw std::runtime_error("trying to wait is only allowed in the same thread holding the mutex");
-            }
-#endif
             if(this->ltype == LockType::WRITE){
                 pthread_rwlock_wrlock(&this->metaPtr->rwlock);
             }
             else{
                 pthread_rwlock_rdlock(&this->metaPtr->rwlock);
             }
+
+            switch(rval){
+                case 0: break;
+                case EINVAL: throw std::runtime_error("invalid time or condition or mutex given");
+                case EPERM: throw std::runtime_error("trying to wait is only allowed in the same thread holding the mutex");
+            }
+#endif
         }
         void notify(){
 #if __cplusplus > 199711L

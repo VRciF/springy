@@ -14,6 +14,7 @@
 #include <fuse.h>
 
 #include "fuse.hpp"
+#include "httpd.hpp"
 #include "settings.hpp"
 
 namespace po = boost::program_options;
@@ -47,6 +48,7 @@ namespace Springy{
 
             Settings config;
             Fuse fuse;
+            Httpd httpd;
 
             bool showusage;
             

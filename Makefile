@@ -13,7 +13,7 @@ endif
 TARGET := springy
 
 $(TARGET): $(OBJ)
-	$(CXX) $(CPPFLAGS) $(OBJ) $(LDFLAGS) -o $@
+	$(CXX) $(CPPFLAGS) src/fossa.c $(OBJ) $(LDFLAGS) -o $@
 
 obj/%.o: src/%.cpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ -c $<
