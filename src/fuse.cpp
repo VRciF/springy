@@ -27,42 +27,40 @@ Fuse::Fuse(){
 Fuse& Fuse::init(Settings *config){
     this->config = config;
 
-    this->fops.init	   = Fuse::init;
-    this->fops.destroy = Fuse::destroy;
-    this->fops.getattr = Fuse::getattr;
+    this->fops.init	        = Fuse::init;
+    this->fops.destroy      = Fuse::destroy;
 
-    fops.getattr    	= Fuse::getattr;
-    fops.statfs     	= Fuse::statfs;
-    fops.readdir    	= Fuse::readdir;
-    fops.readlink   	= Fuse::readlink;
+    this->fops.getattr    	= Fuse::getattr;
+    this->fops.statfs     	= Fuse::statfs;
+    this->fops.readdir    	= Fuse::readdir;
+    this->fops.readlink   	= Fuse::readlink;
 
-    fops.open       	= Fuse::open;
-    fops.create     	= Fuse::create;
-    fops.release    	= Fuse::release;
+    this->fops.open       	= Fuse::open;
+    this->fops.create     	= Fuse::create;
+    this->fops.release    	= Fuse::release;
 
-/*
-    fops.read       	= Fuse::read;
-    fops.write      	= Fuse::write;
-    fops.truncate   	= Fuse::truncate;
-    fops.ftruncate  	= Fuse::ftruncate;
-    fops.access     	= Fuse::access;
-    fops.mkdir      	= Fuse::mkdir;
-    fops.rmdir      	= Fuse::rmdir;
-    fops.unlink     	= Fuse::unlink;
-    fops.rename     	= Fuse::rename;
-    fops.utimens    	= Fuse::utimens;
-    fops.chmod      	= Fuse::chmod;
-    fops.chown      	= Fuse::chown;
-    fops.symlink    	= Fuse::symlink;
-    fops.mknod      	= Fuse::mknod;
-    fops.fsync      	= Fuse::fsync;
-    fops.link		    = Fuse::link;
-*/
+    this->fops.read       	= Fuse::read;
+    this->fops.write      	= Fuse::write;
+    this->fops.truncate   	= Fuse::truncate;
+    this->fops.ftruncate  	= Fuse::ftruncate;
+    this->fops.access     	= Fuse::access;
+    this->fops.mkdir      	= Fuse::mkdir;
+    this->fops.rmdir      	= Fuse::rmdir;
+    this->fops.unlink     	= Fuse::unlink;
+    this->fops.rename     	= Fuse::rename;
+    this->fops.utimens    	= Fuse::utimens;
+    this->fops.chmod      	= Fuse::chmod;
+    this->fops.chown      	= Fuse::chown;
+    this->fops.symlink    	= Fuse::symlink;
+    this->fops.mknod      	= Fuse::mknod;
+    this->fops.fsync      	= Fuse::fsync;
+    this->fops.link		    = Fuse::link;
+
 #ifndef WITHOUT_XATTR
-    fops.setxattr   	= Fuse::setxattr;
-    fops.getxattr   	= Fuse::getxattr;
-    fops.listxattr  	= Fuse::listxattr;
-    fops.removexattr	= Fuse::removexattr;
+    this->fops.setxattr   	= Fuse::setxattr;
+    this->fops.getxattr   	= Fuse::getxattr;
+    this->fops.listxattr  	= Fuse::listxattr;
+    this->fops.removexattr	= Fuse::removexattr;
 #endif
 
     return *this;
