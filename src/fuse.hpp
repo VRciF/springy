@@ -28,7 +28,7 @@ namespace Springy{
             Fuse& tearDown();
 
             static void thread(Fuse *instance);
-            void determineCaller(uid_t *u, gid_t *g, pid_t *p, mode_t *mask);
+            void determineCaller(uid_t *u=NULL, gid_t *g=NULL, pid_t *p=NULL, mode_t *mask=NULL);
 
             ~Fuse();
 

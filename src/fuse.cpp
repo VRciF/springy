@@ -171,15 +171,19 @@ std::string Fuse::concatPath(const std::string &p1, const std::string &p2){
 std::string Fuse::findPath(std::string file_name, struct stat *buf, std::string *usedPath){
 	struct stat b;
 	if(buf==NULL){ buf = &b; }
+    std::cout << "filename:" << file_name << std::endl;
 
-	std::vector<std::string> &directories = this->config->option<std::vector<std::string> >("directories");
+	std::set<std::string> &directories = this->config->option<std::set<std::string> >("directories");
 	Synchronized sDirs(directories, Synchronized::LockType::READ);
 
-	for(unsigned int i=0;i<directories.size();i++){
-		std::string path = this->concatPath(directories[i], file_name);
+    std::set<std::string>::iterator it;
+	for(it=directories.begin();it != directories.end();it++){
+		std::string path = this->concatPath(*it, file_name);
+        std::cout << "path:" << path << std::endl;
+
 		if(::lstat(path.c_str(), buf) != -1){
             if(usedPath!=NULL){
-                usedPath->assign(directories[i]);
+                usedPath->assign(*it);
             }
             return path;
         }
@@ -780,12 +784,14 @@ int Fuse::internal_open(const std::string file, mode_t mode, struct fuse_file_in
 
 	if (getuid() == 0) {
 		struct stat st;
-		gid_t gid = fuse_get_context()->gid;
+        gid_t gid;
+        uid_t uid;
+        this->determineCaller(&uid, &gid);
 		if (fstat(fd, &st) == 0) {
 			// parent directory is SGID'ed
 			if (st.st_gid != getgid()) gid = st.st_gid;
 		}
-		fchown(fd, fuse_get_context()->uid, gid);
+		fchown(fd, uid, gid);
 	}
 
     try{
@@ -1034,13 +1040,15 @@ int Fuse::op_mkdir(const std::string path, mode_t mode)
 	if (::mkdir(name.c_str(), mode) == 0) {
 		if (getuid() == 0) {
 			struct stat st;
-			gid_t gid = fuse_get_context()->gid;
+            gid_t gid;
+            uid_t uid;
+            this->determineCaller(&uid, &gid);
 			if (::lstat(name.c_str(), &st) == 0) {
 				// parent directory is SGID'ed
 				if (st.st_gid != getgid())
 					gid = st.st_gid;
 			}
-			::chown(name.c_str(), fuse_get_context()->uid, gid);
+			::chown(name.c_str(), uid, gid);
 		}
 		return 0;
 	}
@@ -1318,8 +1326,6 @@ int Fuse::op_link(const std::string from, const std::string to)
 int Fuse::op_mknod(const std::string path, mode_t mode, dev_t rdev)
 {
 	int res, i;
-    struct fuse_context * fcontext = NULL;
-
     std::string parent, directory;
     try{
         parent = this->get_parent_path(path);
@@ -1353,8 +1359,10 @@ int Fuse::op_mknod(const std::string path, mode_t mode, dev_t rdev)
 
 		if (res != -1) {
 			if (::getuid() == 0) {
-				fcontext = fuse_get_context();
-				::chown(nod.c_str(), fcontext->uid, fcontext->gid);
+                uid_t uid;
+                gid_t gid;
+                this->determineCaller(&uid, &gid);
+				::chown(nod.c_str(), uid, gid);
 			}
 
 			return 0;
