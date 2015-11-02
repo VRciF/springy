@@ -16,7 +16,7 @@ $(TARGET): $(OBJ)
 	$(CXX) $(CPPFLAGS) src/fossa.c $(OBJ) $(LDFLAGS) -o $@
 
 obj/%.o: src/%.cpp
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ -c $<
+	$(CXX) $(CPPFLAGS) -nostdlib $(CXXFLAGS) -o $@ -c $<
 
 clean:
 	rm obj/*.o

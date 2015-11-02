@@ -1,9 +1,6 @@
 #ifndef SPRINGY_UTIL_FILE
 #define SPRINGY_UTIL_FILE
 
-#include <limits.h>
-#include <stdlib.h>
-
 namespace Springy{
     namespace Util{
         class File{

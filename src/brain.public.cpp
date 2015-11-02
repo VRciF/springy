@@ -3,10 +3,6 @@
 #include "util/string.hpp"
 #include "util/file.hpp"
 
-#include <sys/mount.h>
-#include <sys/resource.h>
-#include <string.h>
-
 #include <boost/log/core.hpp>
 #include <boost/log/trivial.hpp>
 #include <boost/log/expressions.hpp>
@@ -21,7 +17,9 @@ namespace Springy{
         return applicationInstance;
     }
 
-    Brain::~Brain(){}
+    Brain::~Brain(){
+        delete this->libc;
+    }
 
     Brain& Brain::init(){
         boost::log::core::get()->set_filter
@@ -48,7 +46,7 @@ namespace Springy{
 	    limit.rlim_cur = 512000;
 	    limit.rlim_max = 512000;
 
-	    if(setrlimit(RLIMIT_NOFILE, &limit) != 0)
+	    if(this->libc->setrlimit(RLIMIT_NOFILE, &limit) != 0)
 	    {
 		   this->exitStatus = -1;
 		   std::cerr << "setrlimit failed";
@@ -56,7 +54,7 @@ namespace Springy{
 	    }
 
         try{
-            this->fuse.init(&this->config);
+            this->fuse.init(&this->config, this->libc);
         }catch(std::runtime_error &e){
             std::cerr << e.what() << std::endl;
             this->exitStatus = -1;
@@ -109,20 +107,20 @@ namespace Springy{
                 default:
                     {
                         mountpoint = opts[opts.size()-1];
-                        switch(::access(mountpoint.c_str(), F_OK)){
+                        switch(this->libc->access(mountpoint.c_str(), F_OK)){
                             case -1:
                                 if(errno == ENOTCONN){
                                     std::string fuserumountCommand = std::string("fusermount -u \"")+mountpoint+"\"";
-                                    system(fuserumountCommand.c_str());
-                                    if(::access(mountpoint.c_str(), F_OK)==0){
+                                    this->libc->system(fuserumountCommand.c_str());
+                                    if(this->libc->access(mountpoint.c_str(), F_OK)==0){
                                         break;
                                     }
 
-                                    if(::umount(mountpoint.c_str())!=0){
+                                    if(this->libc->umount(mountpoint.c_str())!=0){
                                         std::cerr << strerror(errno) << std::endl;
                                         throw std::runtime_error(std::string("couldnt unmount given mountpoint: ")+mountpoint);
                                     }
-                                    if(::access(mountpoint.c_str(), F_OK)!=0){
+                                    if(this->libc->access(mountpoint.c_str(), F_OK)!=0){
                                         throw std::runtime_error(std::string("inaccessable mount point given: ")+mountpoint);
                                     }
                                 }

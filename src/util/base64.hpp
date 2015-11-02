@@ -1,8 +1,6 @@
 #ifndef __BASE64_HPP__
 #define __BASE64_HPP__
 
-#include <string>
-
 /* 
    base64.cpp and base64.h
 
@@ -30,7 +28,7 @@
 
 */
 
-#include <iostream>
+#include <string>
 
 static const std::string base64_chars = 
              "ABCDEFGHIJKLMNOPQRSTUVWXYZ"

@@ -1,13 +1,15 @@
 #include "brain.hpp"
 
-#include <stdio.h>
+#include "libc/libc.hpp"
 
 namespace Springy{
     Brain::Brain() : preventIOServiceFromExitWorker(io_service),
                      instanceUUID(boost::uuids::random_generator()()),
                      signals(io_service, SIGINT, SIGTERM, SIGHUP),
                      visibleDesc("Springy options")
-    {}
+    {
+        this->libc = new Springy::LibC::LibC();
+    }
 
     void Brain::printHelp(std::ostream & output){
         output << "Usage: springy [DIR1,DIR2,... MOUNTPOINT] [OPTIONS]" << std::endl;

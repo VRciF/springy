@@ -21,11 +21,17 @@ namespace Springy{
 const char *Fuse::fsname = "springy";
 
 Fuse::Fuse(){
-    this->fuse = NULL;
+    this->fuse   = NULL;
     this->config = NULL;
+    this->libc   = NULL;
 }
-Fuse& Fuse::init(Settings *config){
+Fuse& Fuse::init(Settings *config, Springy::LibC::ILibC *libc){
+    if(config == NULL || libc == NULL){
+        throw std::runtime_error("invalid argument given");
+    }
+
     this->config = config;
+    this->libc = libc;
 
     this->fops.init	        = Fuse::init;
     this->fops.destroy      = Fuse::destroy;
@@ -112,7 +118,7 @@ Fuse& Fuse::tearDown(){
 
     if(this->th.joinable()){
         struct stat buf;
-        ::stat(this->mountpoint.c_str(), &buf);
+        this->libc->stat(this->mountpoint.c_str(), &buf);
 
         // wait for 
         try{
@@ -171,7 +177,6 @@ std::string Fuse::concatPath(const std::string &p1, const std::string &p2){
 std::string Fuse::findPath(std::string file_name, struct stat *buf, std::string *usedPath){
 	struct stat b;
 	if(buf==NULL){ buf = &b; }
-    std::cout << "filename:" << file_name << std::endl;
 
 	std::set<std::string> &directories = this->config->option<std::set<std::string> >("directories");
 	Synchronized sDirs(directories, Synchronized::LockType::READ);
@@ -179,9 +184,8 @@ std::string Fuse::findPath(std::string file_name, struct stat *buf, std::string 
     std::set<std::string>::iterator it;
 	for(it=directories.begin();it != directories.end();it++){
 		std::string path = this->concatPath(*it, file_name);
-        std::cout << "path:" << path << std::endl;
 
-		if(::lstat(path.c_str(), buf) != -1){
+		if(this->libc->lstat(path.c_str(), buf) != -1){
             if(usedPath!=NULL){
                 usedPath->assign(*it);
             }
@@ -191,24 +195,26 @@ std::string Fuse::findPath(std::string file_name, struct stat *buf, std::string 
     throw std::runtime_error("file not found");
 }
 std::string Fuse::getMaxFreeSpaceDir(fsblkcnt_t *space){
-	std::vector<std::string> &directories = this->config->option<std::vector<std::string> >("directories");
+	std::set<std::string> &directories = this->config->option<std::set<std::string> >("directories");
 	Synchronized sDirs(directories, Synchronized::LockType::READ);
 
     std::string maxFreeSpaceDir;
     fsblkcnt_t max_space = 0;
-    if(space!=NULL){
+    if(space==NULL){
         space = &max_space;
     }
     *space = 0;
-	for(unsigned int i=0;i<directories.size();i++){
+
+    std::set<std::string>::iterator it;
+	for(it=directories.begin();it != directories.end();it++){
         struct statvfs stf;
-		if (statvfs(directories[i].c_str(), &stf) != 0)
+		if (statvfs(it->c_str(), &stf) != 0)
 			continue;
 		fsblkcnt_t curspace  = stf.f_bsize;
 		curspace *= stf.f_bavail;
         
         if(curspace>*space){
-            maxFreeSpaceDir = directories[i];
+            maxFreeSpaceDir = *it;
             *space = curspace;
         }
     }
@@ -260,7 +266,7 @@ int Fuse::create_parent_dirs(std::string dir, const std::string path)
 	struct stat st;
 
 	// already exists
-	if (::stat(path_parent.c_str(), &st)==0)
+	if (this->libc->stat(path_parent.c_str(), &st)==0)
 	{
 		return 0;
 	}
@@ -274,15 +280,15 @@ int Fuse::create_parent_dirs(std::string dir, const std::string path)
 	}
 
 	// get stat from exists dir
-	if (::stat(exists.c_str(), &st)!=0)
+	if (this->libc->stat(exists.c_str(), &st)!=0)
 	{
 		return -errno;
 	}
-	res=::mkdir(path_parent.c_str(), st.st_mode);
+	res=this->libc->mkdir(path_parent.c_str(), st.st_mode);
 	if (res==0)
 	{
-		::chown(path_parent.c_str(), st.st_uid, st.st_gid);
-		::chmod(path_parent.c_str(), st.st_mode);
+		this->libc->chown(path_parent.c_str(), st.st_uid, st.st_gid);
+		this->libc->chmod(path_parent.c_str(), st.st_mode);
 	}
 	else
 	{
@@ -304,12 +310,12 @@ int Fuse::copy_xattrs(const std::string from, const std::string to)
                 *name_begin=NULL, *name_end=NULL;
 
         // if not xattrs on source, then do nothing
-        if ((listsize=::listxattr(from.c_str(), NULL, 0)) == 0)
+        if ((listsize=this->libc->listxattr(from.c_str(), NULL, 0)) == 0)
                 return 0;
 
         // get all extended attributes
         listbuf=(char *)calloc(sizeof(char), listsize);
-        if (::listxattr(from.c_str(), listbuf, listsize) == -1)
+        if (this->libc->listxattr(from.c_str(), listbuf, listsize) == -1)
         {
                 return -1;
         }
@@ -323,7 +329,7 @@ int Fuse::copy_xattrs(const std::string from, const std::string to)
                         continue;
 
                 // get the size of the extended attribute
-                attrvalsize = ::getxattr(from.c_str(), name_begin, NULL, 0);
+                attrvalsize = this->libc->getxattr(from.c_str(), name_begin, NULL, 0);
                 if (attrvalsize < 0)
                 {
                         return -1;
@@ -331,18 +337,18 @@ int Fuse::copy_xattrs(const std::string from, const std::string to)
 
                 // get the value of the extended attribute
                 attrvalbuf=(char *)calloc(sizeof(char), attrvalsize);
-                if (::getxattr(from.c_str(), name_begin, attrvalbuf, attrvalsize) < 0)
+                if (this->libc->getxattr(from.c_str(), name_begin, attrvalbuf, attrvalsize) < 0)
                 {
                         return -1;
                 }
 
                 // set the value of the extended attribute on dest file
-                if (::setxattr(to.c_str(), name_begin, attrvalbuf, attrvalsize, 0) < 0)
+                if (this->libc->setxattr(to.c_str(), name_begin, attrvalbuf, attrvalsize, 0) < 0)
                 {
                         return -1;
                 }
 
-                free(attrvalbuf);
+                this->libc->free(attrvalbuf);
 
                 // point the pointer to the start of the attr name to the start
                 // of the next attr
@@ -350,7 +356,7 @@ int Fuse::copy_xattrs(const std::string from, const std::string to)
                 name_end++;
         }
 
-        free(listbuf);
+        this->libc->free(listbuf);
         return 0;
 }
 #endif
@@ -360,14 +366,14 @@ int Fuse::dir_is_empty(const std::string path)
 	struct dirent *de;
 	if (!dir)
 		return -1;
-	while((de = ::readdir(dir))) {
-		if (strcmp(de->d_name, ".") == 0) continue;
-		if (strcmp(de->d_name, "..") == 0) continue;
-		::closedir(dir);
+	while((de = this->libc->readdir(dir))) {
+		if (this->libc->strcmp(de->d_name, ".") == 0) continue;
+		if (this->libc->strcmp(de->d_name, "..") == 0) continue;
+		this->libc->closedir(dir);
 		return 0;
 	}
 
-	::closedir(dir);
+	this->libc->closedir(dir);
 	return 1;
 }
 void Fuse::reopen_files(const std::string file, const std::string newDirectory)
@@ -388,27 +394,27 @@ void Fuse::reopen_files(const std::string file, const std::string newDirectory)
         flags &= ~(O_EXCL|O_TRUNC);
 
         // open
-        if ((fh = ::open(newFile.c_str(), flags)) == -1) {
+        if ((fh = this->libc->open(newFile.c_str(), flags)) == -1) {
             it->valid = false;
             continue;
         }
         else
         {
             // seek
-            if (seek != lseek(fh, seek, SEEK_SET)) {
-                ::close(fh);
+            if (seek != this->libc->lseek(fh, seek, SEEK_SET)) {
+                this->libc->close(fh);
                 it->valid = false;
                 continue;
             }
 
             // filehandle
-            if (dup2(fh, it->fd) != it->fd) {
-                ::close(fh);
+            if (this->libc->dup2(fh, it->fd) != it->fd) {
+                this->libc->close(fh);
                 it->valid = false;
                 continue;
             }
             // close temporary filehandle
-            ::close(fh);
+            this->libc->close(fh);
         }
 
         range.first->path = newDirectory;
@@ -453,7 +459,7 @@ void Fuse::move_file(int fd, std::string file, std::string directory, fsblkcnt_t
 		throw std::runtime_error("open file for reading failed");
 
 	if (!(output = fopen(to.c_str(), "w+"))) {
-        ::fclose(input);
+        this->libc->fclose(input);
         throw std::runtime_error("open file for writing failed");
 	}
     
@@ -473,24 +479,24 @@ void Fuse::move_file(int fd, std::string file, std::string directory, fsblkcnt_t
     }while(allocationSize>=st.st_blksize || allocationSize>=4096);
     if(buf==NULL){
         errno = ENOMEM;
-        ::fclose(input);
-        ::fclose(output);
-        ::unlink(to.c_str());
+        this->libc->fclose(input);
+        this->libc->fclose(output);
+        this->libc->unlink(to.c_str());
         throw std::runtime_error("not enough memory");
     }
 
-	while((size = ::read(inputfd, buf, sizeof(char)*allocationSize))>0) {
+	while((size = this->libc->read(inputfd, buf, sizeof(char)*allocationSize))>0) {
         ssize_t written = 0;
         while(written<=size){
-            size_t bytesWritten = ::write(outputfd, buf+written, sizeof(char)*(size-written));
+            size_t bytesWritten = this->libc->write(outputfd, buf+written, sizeof(char)*(size-written));
             if(bytesWritten>0){
                 written += bytesWritten;
             }
             else{
-                ::fclose(input);
-                ::fclose(output);
+                this->libc->fclose(input);
+                this->libc->fclose(output);
                 delete[] buf;
-                ::unlink(to.c_str());
+                this->libc->unlink(to.c_str());
                 throw std::runtime_error("moving file failed");
             }
         }
@@ -498,23 +504,23 @@ void Fuse::move_file(int fd, std::string file, std::string directory, fsblkcnt_t
 
     delete[] buf;
 	if(size==-1){
-        ::fclose(input);
-        ::fclose(output);
-        ::unlink(to.c_str());
+        this->libc->fclose(input);
+        this->libc->fclose(output);
+        this->libc->unlink(to.c_str());
         throw std::runtime_error("read error occured");
     }
 
-	::fclose(input);
+	this->libc->fclose(input);
 
 	// owner/group/permissions
-	::fchmod(outputfd, st.st_mode);
-	::fchown(outputfd, st.st_uid, st.st_gid);
-	::fclose(output);
+	this->libc->fchmod(outputfd, st.st_mode);
+	this->libc->fchown(outputfd, st.st_uid, st.st_gid);
+	this->libc->fclose(output);
 
 	// time
 	ftime.actime = st.st_atime;
 	ftime.modtime = st.st_mtime;
-	::utime(to.c_str(), &ftime);
+	this->libc->utime(to.c_str(), &ftime);
 
 #ifndef WITHOUT_XATTR
         // extended attributes
@@ -530,15 +536,15 @@ void Fuse::move_file(int fd, std::string file, std::string directory, fsblkcnt_t
             it->path = maxSpaceDir;  // path is not indexed, thus no need to replace in openFiles
         }
     }catch(...){
-        ::unlink(to.c_str());
+        this->libc->unlink(to.c_str());
         throw std::runtime_error("failed to modify internal data structure");
     }
 
     try{
         this->reopen_files(file, maxSpaceDir);
-        ::unlink(from.c_str());
+        this->libc->unlink(from.c_str());
     }catch(...){
-        ::unlink(to.c_str());
+        this->libc->unlink(to.c_str());
         throw std::runtime_error("failed to reopen already open files");
     }
 }
@@ -552,6 +558,8 @@ void Fuse::op_destroy(void *arg){
 
 int Fuse::op_getattr(const std::string file_name, struct stat *buf)
 {
+    if(buf==NULL){ return -EINVAL; }
+
 	try{
 		std::string path = this->findPath(file_name, buf);
 		return 0;
@@ -563,23 +571,35 @@ int Fuse::op_getattr(const std::string file_name, struct stat *buf)
 
 int Fuse::op_statfs(const std::string path, struct statvfs *buf)
 {
+    if(buf==NULL){ return -EINVAL; }
+
 	std::map<dev_t, struct statvfs> stats;
 	std::map<dev_t, struct statvfs>::iterator it;
-	std::vector<std::string> &directories = this->config->option<std::vector<std::string> >("directories");
+    
+    try{
+		this->findPath(path);
+	}
+	catch(...){
+        return -ENOENT;
+    }
+
+    std::set<std::string> &directories = this->config->option<std::set<std::string> >("directories");
 	Synchronized sDirs(directories, Synchronized::LockType::READ);
 
     unsigned long min_block = 0, min_frame = 0;
 
-	for(unsigned int i=0;i<directories.size();i++){
+    std::set<std::string>::iterator dit;
+	for(dit=directories.begin();dit != directories.end();dit++){
+
 		struct stat st;
-		int ret = stat(directories[i].c_str(), &st);
+		int ret = stat(dit->c_str(), &st);
 		if (ret != 0) {
 			return -errno;
 		}
 		if(stats.find(st.st_dev)!=stats.end()){ continue; }
-		
+
 		struct statvfs stv;
-		ret = ::statvfs(directories[i].c_str(), &stv);
+		ret = this->libc->statvfs(dit->c_str(), &stv);
 		if (ret != 0) {
 			return -errno;
 		}
@@ -611,7 +631,7 @@ int Fuse::op_statfs(const std::string path, struct statvfs *buf)
 			it->second.f_blocks   *=  it->second.f_frsize/min_frame;
 			it->second.f_frsize   =   min_frame;
 		}
-		
+
 		if(it==stats.begin()){
 			memcpy(buf, &it->second, sizeof(struct statvfs));
 			continue;
@@ -641,16 +661,17 @@ int Fuse::op_readdir(
     std::unordered_map<std::string, struct stat> dir_item_ht;
     std::unordered_map<std::string, struct stat>::iterator it;
     struct stat st;
-	size_t i, found;
+	size_t i, found=0;
     std::vector<std::string> dirs;
 
-	std::vector<std::string> &directories = this->config->option<std::vector<std::string> >("directories");
+	std::set<std::string> &directories = this->config->option<std::set<std::string> >("directories");
 	Synchronized sDirs(directories, Synchronized::LockType::READ);
 
 	// find all dirs
-    for (found = i = 0; i < directories.size(); i++) {
-		std::string path = this->concatPath(directories[i], dirname);
-		if (stat(path.c_str(), &st) == 0) {
+    std::set<std::string>::iterator dit;
+	for(dit=directories.begin();dit != directories.end();dit++){
+		std::string path = this->concatPath(*dit, dirname);
+		if (this->libc->stat(path.c_str(), &st) == 0) {
 			found++;
 			if (S_ISDIR(st.st_mode)) {
                 dirs.push_back(path);
@@ -668,13 +689,14 @@ int Fuse::op_readdir(
 	}
 
 	// read directories
-	for (int i = 0; dirs.size(); i++) {
+	for (int i = 0; i<dirs.size(); i++) {
 		struct dirent *de;
-		DIR * dh = opendir(dirs[i].c_str());
-		if (!dh)
+		DIR * dh = this->libc->opendir(dirs[i].c_str());
+		if (!dh){
 			continue;
+        }
 
-		while((de = ::readdir(dh))) {
+		while((de = this->libc->readdir(dh))) {
 			// find dups
             if(dir_item_ht.find(de->d_name)!=dir_item_ht.end()){
                 continue;
@@ -683,11 +705,11 @@ int Fuse::op_readdir(
 			// add item
             std::string object_name = this->concatPath(dirs[i], de->d_name);
 
-            lstat(object_name.c_str(), &st);
+            this->libc->lstat(object_name.c_str(), &st);
             dir_item_ht.insert(std::make_pair(de->d_name, st));
 		}
 
-		closedir(dh);
+		this->libc->closedir(dh);
 	}
 
     for(it=dir_item_ht.begin();it!=dir_item_ht.end();it++){
@@ -700,11 +722,13 @@ int Fuse::op_readdir(
 
 int Fuse::op_readlink(const std::string path, char *buf, size_t size)
 {
+    if(buf==NULL){ return -EINVAL; }
+
     int res = 0;
     try{
         std::string link = this->findPath(path);
         memset(buf, 0, size);
-        res = ::readlink(link.c_str(), buf, size);
+        res = this->libc->readlink(link.c_str(), buf, size);
 
         if (res >= 0)
             return 0;
@@ -723,9 +747,9 @@ int Fuse::internal_open(const std::string file, mode_t mode, struct fuse_file_in
         std::string usedPath;
 	    std::string path = this->findPath(file, NULL, &usedPath);
 		if (mode != 0)
-			fd = ::open(path.c_str(), fi->flags, mode);
+			fd = this->libc->open(path.c_str(), fi->flags, mode);
 		else
-			fd = ::open(path.c_str(), fi->flags);
+			fd = this->libc->open(path.c_str(), fi->flags);
 		if (fd == -1) {
 			return -errno;
 		}
@@ -749,7 +773,7 @@ int Fuse::internal_open(const std::string file, mode_t mode, struct fuse_file_in
             //log boost::current_exception_diagnostic_information()
             if(errno==0){ errno = ENOMEM; }
             int rval = errno;
-            ::close(fd);
+            this->libc->close(fd);
             return -rval;
         }
 
@@ -774,9 +798,9 @@ int Fuse::internal_open(const std::string file, mode_t mode, struct fuse_file_in
     
     int fd = -1;
 	if (mode != 0)
-		fd = ::open(path.c_str(), fi->flags, mode);
+		fd = this->libc->open(path.c_str(), fi->flags, mode);
 	else
-		fd = ::open(path.c_str(), fi->flags);
+		fd = this->libc->open(path.c_str(), fi->flags);
 
 	if (fd == -1) {
 		return -errno;
@@ -814,7 +838,7 @@ int Fuse::internal_open(const std::string file, mode_t mode, struct fuse_file_in
         //log boost::current_exception_diagnostic_information()
         if(errno==0){ errno = ENOMEM; }
         int rval = errno;
-        ::close(fd);
+        this->libc->close(fd);
         return -rval;
     }
 
@@ -843,7 +867,7 @@ int Fuse::op_release(const std::string path, struct fuse_file_info *fi)
 
     try{
         Synchronized syncOpenFiles(this->openFiles);
-        ::close(fd);
+        this->libc->close(fd);
 
         openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
         openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
@@ -869,6 +893,8 @@ int Fuse::op_release(const std::string path, struct fuse_file_info *fi)
 
 int Fuse::op_read(const std::string, char *buf, size_t count, off_t offset, struct fuse_file_info *fi)
 {
+    if(buf==NULL){ return -EINVAL; }
+
     int fd = fi->fh;
     try{
         Synchronized syncOpenFiles(this->openFiles);
@@ -892,6 +918,8 @@ int Fuse::op_read(const std::string, char *buf, size_t count, off_t offset, stru
 
 int Fuse::op_write(const std::string file, const char *buf, size_t count, off_t offset, struct fuse_file_info *fi)
 {
+    if(buf==NULL){ return -EINVAL; }
+
 	ssize_t res;
     int fd = fi->fh;
     try{
@@ -928,7 +956,7 @@ int Fuse::op_write(const std::string file, const char *buf, size_t count, off_t 
 
     Synchronized sync(syncToken);
 
-	res = ::pwrite(fd, buf, count, offset);
+	res = this->libc->pwrite(fd, buf, count, offset);
 	if ((res == (ssize_t)count) || (res == -1 && errno != ENOSPC)) {
 		if (res == -1) {
 			return -errno;
@@ -948,7 +976,7 @@ int Fuse::op_write(const std::string file, const char *buf, size_t count, off_t 
     }
 
 	if (res == 0) {
-        res = ::pwrite(fd, buf, count, offset);
+        res = this->libc->pwrite(fd, buf, count, offset);
 
 		if (res == -1) {
 			return -errno;
@@ -965,7 +993,7 @@ int Fuse::op_truncate(const std::string path, off_t size)
 {
     try{
         std::string file = this->findPath(path);
-        int res = ::truncate(file.c_str(), size);
+        int res = this->libc->truncate(file.c_str(), size);
 
 		if (res == -1)
 			return -errno;
@@ -989,7 +1017,7 @@ int Fuse::op_ftruncate(const std::string path, off_t size, struct fuse_file_info
         }
     }catch(...){}
 
-	if (::ftruncate(fd, size) == -1)
+	if (this->libc->ftruncate(fd, size) == -1)
 		return -errno;
 	return 0;
 }
@@ -998,7 +1026,7 @@ int Fuse::op_access(const std::string path, int mask)
 {
     try{
         std::string file = this->findPath(path);
-        int res = ::access(file.c_str(), mask);
+        int res = this->libc->access(file.c_str(), mask);
 
 		if (res == -1)
 			return -errno;
@@ -1037,18 +1065,18 @@ int Fuse::op_mkdir(const std::string path, mode_t mode)
 
     this->create_parent_dirs(dir, path);
 	std::string name = this->concatPath(dir, path);
-	if (::mkdir(name.c_str(), mode) == 0) {
+	if (this->libc->mkdir(name.c_str(), mode) == 0) {
 		if (getuid() == 0) {
 			struct stat st;
             gid_t gid;
             uid_t uid;
             this->determineCaller(&uid, &gid);
-			if (::lstat(name.c_str(), &st) == 0) {
+			if (this->libc->lstat(name.c_str(), &st) == 0) {
 				// parent directory is SGID'ed
 				if (st.st_gid != getgid())
 					gid = st.st_gid;
 			}
-			::chown(name.c_str(), uid, gid);
+			this->libc->chown(name.c_str(), uid, gid);
 		}
 		return 0;
 	}
@@ -1061,14 +1089,14 @@ int Fuse::op_rmdir(const std::string path)
     int res = 0;
 
     try{
-        while(true) {
-            dir = this->findPath(path);
-            res = ::rmdir(dir.c_str());
-            if (res == -1) return -errno;
-        }
+        dir = this->findPath(path);
+        res = this->libc->rmdir(dir.c_str());
+        if (res == -1){ return -errno; }
+
+        return 0;
     }catch(...){}
 
-	return 0;
+    return -ENOENT;
 }
 
 int Fuse::op_unlink(const std::string path)
@@ -1077,7 +1105,7 @@ int Fuse::op_unlink(const std::string path)
 
     try{
 	    std::string file = this->findPath(path);
-        res = ::unlink(file.c_str());
+        res = this->libc->unlink(file.c_str());
     }catch(...){
 		errno = ENOENT;
 		return -errno;
@@ -1097,13 +1125,14 @@ int Fuse::op_rename(const std::string from, const std::string to)
 	if (from == to)
 		return 0;
 
-	std::vector<std::string> &directories = this->config->option<std::vector<std::string> >("directories");
+	std::set<std::string> &directories = this->config->option<std::set<std::string> >("directories");
 	Synchronized sDirs(directories, Synchronized::LockType::READ);
 
 	// seek for possible errors
-    for (size_t i = 0; i < directories.size(); i++) {
-		std::string obj_to   = this->concatPath(directories[i], to);
-		std::string obj_from = this->concatPath(directories[i], from);
+    std::set<std::string>::iterator dit;
+	for(dit=directories.begin();dit != directories.end();dit++){
+		std::string obj_to   = this->concatPath(*dit, to);
+		std::string obj_from = this->concatPath(*dit, from);
 		if (stat(obj_to.c_str(), &sto) == 0) {
 			if (S_ISDIR(sto.st_mode)) {
 				to_is_dir++;
@@ -1138,11 +1167,11 @@ int Fuse::op_rename(const std::string from, const std::string to)
     }
 
 	// rename cycle
-	for (size_t i = 0; i < directories.size(); i++) {
-		std::string obj_to   = this->concatPath(directories[i], to);
-		std::string obj_from = this->concatPath(directories[i], from);
+	for(dit=directories.begin();dit != directories.end();dit++){
+		std::string obj_to   = this->concatPath(*dit, to);
+		std::string obj_from = this->concatPath(*dit, from);
 
-		if (::stat(obj_from.c_str(), &sfrom) == 0) {
+		if (this->libc->stat(obj_from.c_str(), &sfrom) == 0) {
 			// if from is dir and at the same time file, we only rename dir
 			if (from_is_dir && from_is_file) {
 				if (!S_ISDIR(sfrom.st_mode)) {
@@ -1150,17 +1179,17 @@ int Fuse::op_rename(const std::string from, const std::string to)
 				}
 			}
 
-			this->create_parent_dirs(directories[i], to);
+			this->create_parent_dirs(*dit, to);
 
-			res = ::rename(obj_from.c_str(), obj_to.c_str());
+			res = this->libc->rename(obj_from.c_str(), obj_to.c_str());
 			if (res == -1) {
 				return -errno;
 			}
 		} else {
 			// from and to are files, so we must remove to files
 			if (from_is_file && to_is_file && !from_is_dir) {
-				if (::stat(obj_to.c_str(), &sto) == 0) {
-					if (::unlink(obj_to.c_str()) == -1) {
+				if (this->libc->stat(obj_to.c_str(), &sto) == 0) {
+					if (this->libc->unlink(obj_to.c_str()) == -1) {
 						return -errno;
 					}
 				}
@@ -1174,17 +1203,18 @@ int Fuse::op_rename(const std::string from, const std::string to)
 
 int Fuse::op_utimens(const std::string path, const struct timespec ts[2])
 {
-	size_t i, flag_found;
+	size_t flag_found;
     int res;
     struct timeval tv[2];
     struct stat st;
 
-	std::vector<std::string> &directories = this->config->option<std::vector<std::string> >("directories");
+	std::set<std::string> &directories = this->config->option<std::set<std::string> >("directories");
 	Synchronized sDirs(directories, Synchronized::LockType::READ);
 
-    for (flag_found = i = 0; i < directories.size(); i++) {
-		std::string object = this->concatPath(directories[i], path);
-		if (::lstat(object.c_str(), &st) != 0) {
+    std::set<std::string>::iterator dit;
+	for(dit=directories.begin(), flag_found=0;dit != directories.end();dit++){
+		std::string object = this->concatPath(*dit, path);
+		if (this->libc->lstat(object.c_str(), &st) != 0) {
 			continue;
 		}
 
@@ -1195,7 +1225,7 @@ int Fuse::op_utimens(const std::string path, const struct timespec ts[2])
 		tv[1].tv_sec = ts[1].tv_sec;
 		tv[1].tv_usec = ts[1].tv_nsec / 1000;
 
-		res = ::lutimes(object.c_str(), tv);
+		res = this->libc->lutimes(object.c_str(), tv);
 
 		if (res == -1)
 			return -errno;
@@ -1208,21 +1238,22 @@ int Fuse::op_utimens(const std::string path, const struct timespec ts[2])
 
 int Fuse::op_chmod(const std::string path, mode_t mode)
 {
-	size_t i, flag_found;
+	size_t flag_found;
     int res;
     struct stat st;
 
-	std::vector<std::string> &directories = this->config->option<std::vector<std::string> >("directories");
+	std::set<std::string> &directories = this->config->option<std::set<std::string> >("directories");
 	Synchronized sDirs(directories, Synchronized::LockType::READ);
 
-    for (flag_found = i = 0; i < directories.size(); i++) {
-		std::string object = this->concatPath(directories[i], path);
-		if (::lstat(object.c_str(), &st) != 0) {
+    std::set<std::string>::iterator dit;
+	for(dit=directories.begin(), flag_found=0;dit != directories.end();dit++){
+		std::string object = this->concatPath(*dit, path);
+		if (this->libc->lstat(object.c_str(), &st) != 0) {
 			continue;
 		}
 
 		flag_found = 1;
-		res = ::chmod(object.c_str(), mode);
+		res = this->libc->chmod(object.c_str(), mode);
 
 		if (res == -1)
 			return -errno;
@@ -1235,21 +1266,22 @@ int Fuse::op_chmod(const std::string path, mode_t mode)
 
 int Fuse::op_chown(const std::string path, uid_t uid, gid_t gid)
 {
-	size_t i, flag_found;
+	size_t flag_found;
     int res;
     struct stat st;
 
-	std::vector<std::string> &directories = this->config->option<std::vector<std::string> >("directories");
+	std::set<std::string> &directories = this->config->option<std::set<std::string> >("directories");
 	Synchronized sDirs(directories, Synchronized::LockType::READ);
 
-    for (flag_found = i = 0; i < directories.size(); i++) {
-		std::string object = this->concatPath(directories[i], path);
-		if (::lstat(object.c_str(), &st) != 0) {
+    std::set<std::string>::iterator dit;
+	for(dit=directories.begin(), flag_found=0;dit != directories.end();dit++){
+		std::string object = this->concatPath(*dit, path);
+		if (this->libc->lstat(object.c_str(), &st) != 0) {
 			continue;
 		}
 
 		flag_found = 1;
-		res = ::lchown(object.c_str(), uid, gid);
+		res = this->libc->lchown(object.c_str(), uid, gid);
 		if (res == -1)
 			return -errno;
 	}
@@ -1316,7 +1348,7 @@ int Fuse::op_link(const std::string from, const std::string to)
 	std::string path_from = this->concatPath(directory, from);
 	std::string path_to = this->concatPath(directory, to);
 
-	res = ::link(path_from.c_str(), path_to.c_str());
+	res = this->libc->link(path_from.c_str(), path_to.c_str());
 
 	if (res == 0)
 		return 0;
@@ -1349,20 +1381,20 @@ int Fuse::op_mknod(const std::string path, mode_t mode, dev_t rdev)
 		std::string nod = this->concatPath(directory, path);
 
 		if (S_ISREG(mode)) {
-			res = ::open(nod.c_str(), O_CREAT | O_EXCL | O_WRONLY, mode);
+			res = this->libc->open(nod.c_str(), O_CREAT | O_EXCL | O_WRONLY, mode);
 			if (res >= 0)
 				res = close(res);
 		} else if (S_ISFIFO(mode))
-			res = ::mkfifo(nod.c_str(), mode);
+			res = this->libc->mkfifo(nod.c_str(), mode);
 		else
-			res = ::mknod(nod.c_str(), mode, rdev);
+			res = this->libc->mknod(nod.c_str(), mode, rdev);
 
 		if (res != -1) {
-			if (::getuid() == 0) {
+			if (this->libc->getuid() == 0) {
                 uid_t uid;
                 gid_t gid;
                 this->determineCaller(&uid, &gid);
-				::chown(nod.c_str(), uid, gid);
+				this->libc->chown(nod.c_str(), uid, gid);
 			}
 
 			return 0;
@@ -1399,10 +1431,10 @@ int Fuse::op_fsync(const std::string path, int isdatasync, struct fuse_file_info
 
 #ifdef HAVE_FDATASYNC
 	if (isdatasync)
-		res = ::fdatasync(fd);
+		res = this->libc->fdatasync(fd);
 	else
 #endif
-		res = ::fsync(fd);
+		res = this->libc->fsync(fd);
 
 	if (res == -1)
 		return -errno;
@@ -1415,7 +1447,7 @@ int Fuse::op_setxattr(const std::string file_name, const std::string attrname,
 {
 	try{
 		std::string path = this->findPath(file_name);
-        if (::setxattr(path.c_str(), attrname.c_str(), attrval, attrvalsize, flags) == -1) return -errno;
+        if (this->libc->setxattr(path.c_str(), attrname.c_str(), attrval, attrvalsize, flags) == -1) return -errno;
 		return 0;
 	}
 	catch(...){}
@@ -1426,7 +1458,7 @@ int Fuse::op_getxattr(const std::string file_name, const std::string attrname, c
 {
 	try{
 		std::string path = this->findPath(file_name);
-        int size = ::getxattr(path.c_str(), attrname.c_str(), buf, count);
+        int size = this->libc->getxattr(path.c_str(), attrname.c_str(), buf, count);
         if(size == -1) return -errno;
 		return size;
 	}
@@ -1439,7 +1471,7 @@ int Fuse::op_listxattr(const std::string file_name, char *buf, size_t count)
     try{
 		std::string path = this->findPath(file_name);
 		int ret = 0;
-        if((ret=::listxattr(path.c_str(), buf, count)) == -1) return -errno;
+        if((ret=this->libc->listxattr(path.c_str(), buf, count)) == -1) return -errno;
 		return ret;
 	}
 	catch(...){}
@@ -1450,7 +1482,7 @@ int Fuse::op_removexattr(const std::string file_name, const std::string attrname
 {
 	try{
 		std::string path = this->findPath(file_name);
-        if(::removexattr(path.c_str(), attrname.c_str()) == -1) return -errno;
+        if(this->libc->removexattr(path.c_str(), attrname.c_str()) == -1) return -errno;
 		return 0;
 	}
 	catch(...){}

@@ -13,6 +13,7 @@
 #include <boost/multi_index/member.hpp>
 
 #include "settings.hpp"
+#include "libc/ilibc.hpp"
 
 namespace Springy{
     class Fuse{
@@ -22,7 +23,7 @@ namespace Springy{
             };
         public:
             Fuse();
-            Fuse& init(Settings *config);
+            Fuse& init(Settings *config, Springy::LibC::ILibC *libc);
             Fuse& setUp(bool singleThreaded);
             Fuse& run();
             Fuse& tearDown();
@@ -113,6 +114,8 @@ namespace Springy{
 
         protected:
             Settings *config;
+            Springy::LibC::ILibC *libc;
+
             bool singleThreaded;
             static const char *fsname;
             std::string mountpoint;

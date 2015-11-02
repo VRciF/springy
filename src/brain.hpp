@@ -15,6 +15,7 @@
 
 #include "fuse.hpp"
 #include "httpd.hpp"
+#include "libc/ilibc.hpp"
 #include "settings.hpp"
 
 namespace po = boost::program_options;
@@ -46,6 +47,7 @@ namespace Springy{
             po::options_description visibleDesc;
             po::options_description hiddenDesc;
 
+            Springy::LibC::ILibC *libc;
             Settings config;
             Fuse fuse;
             Httpd httpd;
