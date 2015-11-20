@@ -197,15 +197,21 @@ std::string Fuse::findPath(std::string file_name, struct stat *buf, std::string 
 
     std::map<std::string, std::string>::iterator it;
 	for(it=directories.begin();it != directories.end();it++){
-        // MISSING: handle virtual mountpoint
-		std::string path = this->concatPath(it->first, file_name);
+		std::string path;
+		if(file_name!="/" && it->second.find(file_name)){
+			path = file_name;
+			file_name = std::string();
+		}
+		else if(file_name.find(it->second)!=0){ continue; }
+
+		path = this->concatPath(it->first, file_name);
 
 		if(this->libc->lstat(path.c_str(), buf) != -1){
-            if(usedPath!=NULL){
-                usedPath->assign(it->first);
-            }
-            return path;
-        }
+			if(usedPath!=NULL){
+				usedPath->assign(it->first);
+			}
+			return path;
+		}
     }
     throw std::runtime_error("file not found");
 }
