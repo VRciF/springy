@@ -83,11 +83,15 @@ namespace Springy{
                 virtual int rename(const char *oldpath, const char *newpath) = 0;
                 virtual int futimes(int fd, const struct timeval tv[2]) = 0;
                 virtual int lutimes(const char *filename, const struct timeval tv[2]) = 0;
+                virtual int utimensat(int dirfd, const char *pathname, const struct timespec times[2], int flags) = 0;
+                virtual int futimens(int fd, const struct timespec times[2]) = 0;
+
                 virtual int link(const char *oldpath, const char *newpath) = 0;
                 virtual int mkfifo(const char *pathname, mode_t mode) = 0;
                 virtual int fsync(int fd) = 0;
                 virtual int fdatasync(int fd) = 0;
                 virtual int mknod(const char *pathname, mode_t mode, dev_t dev) = 0;
+                virtual int symlink(const char *oldpath, const char *newpath) = 0;
 
                 virtual uid_t getuid(void) = 0;
                 virtual uid_t geteuid(void) = 0;

@@ -32,13 +32,19 @@ void Httpd::start(){
     memset(&this->data, '\0', sizeof(this->data));
     this->data.shall_run = true;
 
-    int &server_port = this->config->option<int>("httpdPort");
+    int server_port = 8787;
+    if(this->config->exists("httpdPort")){
+        server_port = this->config->option<int>("httpdPort");
+    }
+    std::cout << "server port: " << server_port << std::endl;
 
     char serveraddr[64] = {'\0'};
-    snprintf(serveraddr, sizeof(serveraddr)-1, "0.0.0.0:%d", server_port);
+    //snprintf(serveraddr, sizeof(serveraddr)-1, "0.0.0.0:%d", server_port);
+    snprintf(serveraddr, sizeof(serveraddr)-1, "%d", server_port);
 
     ns_mgr_init(&this->data.mgr, NULL);
     ns_bind_opts opts;
+    memset(&opts, '\0', sizeof(opts));
     opts.user_data = (void*)this;
     this->data.serverSocket = ns_bind_opt(&this->data.mgr, serveraddr, Httpd::ev_handler, opts);
     if(this->data.serverSocket==NULL){
@@ -66,7 +72,7 @@ void Httpd::start(){
     s_http_server_opts.url_rewrites = argv[++i];
     */
 
-    if(pthread_create(&this->data.thHttpServer, NULL, Httpd::server, NULL)!=0) {
+    if(pthread_create(&this->data.thHttpServer, NULL, Httpd::server, this)!=0) {
         ns_mgr_free(&this->data.mgr);
         throw std::runtime_error("creating server thread failed");
     }
@@ -75,7 +81,10 @@ void Httpd::start(){
 }
 void Httpd::stop(){
     this->running = false;
-    this->data.shall_run = false;
+    {
+        Synchronized sync(this->data.shall_run, Synchronized::LockType::WRITE);
+        this->data.shall_run = false;
+    }
     pthread_join(this->data.thHttpServer, NULL);
 }
 Httpd::~Httpd(){
@@ -89,12 +98,21 @@ Httpd::~Httpd(){
 
 void Httpd::handle_directory(int what, struct ns_connection *nc, struct http_message *hm){
   char directory[8192] = {'\0'};
+  char vmountpoint[8192] = {'\0'};
   char callback[256]   = {'\0'};
   char response[8192]  = {'\0'};
 
   /* Get form variables */
   do{
       ns_get_http_var(&hm->query_string, "callback", callback, sizeof(callback));
+      ns_get_http_var(&hm->query_string, "vmountpoint", vmountpoint, sizeof(vmountpoint));
+      if(strlen(vmountpoint)<=0){
+          vmountpoint[0] = '/';
+      }
+      else if(vmountpoint[0] != '/'){
+          snprintf(response, sizeof(response)-1, "{success: false, message: 'given vmountpoint parameter must start with a slash(/)-character', data: null}");
+          break;
+      }
 
       if(ns_get_http_var(&hm->query_string, "directory", directory, sizeof(directory))<=0){
           snprintf(response, sizeof(response)-1, "{success: false, message: 'invalid (length) directory parameter given', data: null}");
@@ -110,15 +128,17 @@ void Httpd::handle_directory(int what, struct ns_connection *nc, struct http_mes
       switch(what){
           case 1:
           {
-          	  std::vector<std::string> &directories = this->config->option<std::vector<std::string> >("directories");
+          	  std::map<std::string, std::string> &directories = this->config->option<std::map<std::string, std::string> >("directories");
               Synchronized sDirs(directories);
-              directories.push_back(directory);
+              directories.insert(std::make_pair(directory, vmountpoint));
           }
-              break;
+          break;
           case 0:
           {
-          	  std::vector<std::string> &directories = this->config->option<std::vector<std::string> >("directories");
+          	  std::map<std::string, std::string> &directories = this->config->option<std::map<std::string, std::string> >("directories");
               Synchronized sDirs(directories);
+              directories.erase(directory);
+              /*
               for(std::vector<std::string>::iterator it = directories.begin();it!=directories.end();){
                   if (boost::starts_with(*it, directory)){
                       int idx = it - directories.begin();
@@ -128,8 +148,9 @@ void Httpd::handle_directory(int what, struct ns_connection *nc, struct http_mes
                   }
                   it++;
               }
+              */
           }
-              break;
+          break;
       }
 
       if(errno!=0){
@@ -179,6 +200,7 @@ void Httpd::ev_handler(struct ns_connection *nc, int ev, void *ev_data) {
 void* Httpd::server(void *arg)
 {
     Httpd* instance = (Httpd*)arg;
+
 /*
     int res = 0, fd;
     struct ifreq ifr;
@@ -200,9 +222,18 @@ void* Httpd::server(void *arg)
     }
 */
 
-    while(instance->data.shall_run) {
+    std::cout << __FILE__ << ":" << __LINE__ << std::endl;
+    while(true) {
         ns_mgr_poll(&instance->data.mgr, 500);
+
+        {
+            Synchronized sync(instance->data.shall_run, Synchronized::LockType::READ);
+            if(!instance->data.shall_run){
+                break;
+            }
+        }
     }
+    std::cout << __FILE__ << ":" << __LINE__ << std::endl;
 
     ns_mgr_free(&instance->data.mgr);
 

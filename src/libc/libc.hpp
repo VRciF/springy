@@ -92,11 +92,15 @@ namespace Springy{
                 virtual int rename(const char *oldpath, const char *newpath){ return ::rename(oldpath, newpath); }
                 virtual int futimes(int fd, const struct timeval tv[2]){ return ::futimes(fd, tv); }
                 virtual int lutimes(const char *filename, const struct timeval tv[2]){ return ::lutimes(filename, tv); }
+                virtual int utimensat(int dirfd, const char *pathname, const struct timespec times[2], int flags){ return ::utimensat(dirfd, pathname, times, flags); }
+                virtual int futimens(int fd, const struct timespec times[2]){ return ::futimens(fd, times); }
+
                 virtual int link(const char *oldpath, const char *newpath){ return ::link(oldpath, newpath); }
                 virtual int mkfifo(const char *pathname, mode_t mode){ return ::mkfifo(pathname, mode); }
                 virtual int fsync(int fd){ return ::fsync(fd); }
                 virtual int fdatasync(int fd){ return ::fdatasync(fd); }
                 virtual int mknod(const char *pathname, mode_t mode, dev_t dev){ return ::mknod(pathname, mode, dev); }
+                virtual int symlink(const char *oldpath, const char *newpath){ return ::symlink(oldpath, newpath); }
 
                 virtual uid_t getuid(void){ return ::getuid(); }
                 virtual uid_t geteuid(void){ return ::geteuid(); }

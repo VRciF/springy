@@ -41,16 +41,15 @@ namespace Springy{
             ("input", po::value<std::vector<std::string> >()->composing(), "Input")
         ;
         this->m_positional.add("input", -1);
-        
+
         struct rlimit limit;
 	    limit.rlim_cur = 512000;
 	    limit.rlim_max = 512000;
-
 	    if(this->libc->setrlimit(RLIMIT_NOFILE, &limit) != 0)
 	    {
-		   this->exitStatus = -1;
-		   std::cerr << "setrlimit failed";
-		   return *this;
+		   //this->exitStatus = -1;
+		   std::cerr << "setrlimit failed (i'll continue): " << errno << ":" << strerror(errno) << std::endl;
+		   //return *this;
 	    }
 
         try{
@@ -60,7 +59,7 @@ namespace Springy{
             this->exitStatus = -1;
             return *this;
         }
-        
+
         try{
             httpd.init(&this->config);
         }catch(std::runtime_error &e){
@@ -72,6 +71,10 @@ namespace Springy{
         return *this;
     }
     Brain& Brain::setUp(int argc, char *argv[]){
+        if(this->exitStatus){
+            return *this;
+        }
+
         try{
             po::variables_map vm;
             po::options_description allDesc;
@@ -99,7 +102,7 @@ namespace Springy{
             }
 
             std::string mountpoint;
-            std::set<std::string> directories;
+            std::map<std::string, std::string> directories;
 
             switch(opts.size()){
                 case 0:
@@ -139,22 +142,31 @@ namespace Springy{
                             }
 
                             for(unsigned int i=0;i<tmpdirs.size();i++){
+                                std::string virtualmountpoint = "/";
                                 std::string directory = Util::File::realpath(Util::String::urldecode(tmpdirs[i]));
-                                
+                                size_t pos = directory.find("=");
+                                if(pos != std::string::npos){
+                                    virtualmountpoint = directory.substr(0, pos);
+                                    directory = directory.substr(pos+1);
+                                }
+
                                 if(directory.find(mountpoint)!=std::string::npos){
                                     throw std::runtime_error(std::string("directory within mountpoint not allowed: ")+directory);
                                 }
 
-                                directories.insert(directory);
+                                directories.insert(std::make_pair(directory, virtualmountpoint));
                             }
                         }
                     }
                     break;
                 }
 
-                for (const auto& dir: directories) {
+                std::map<std::string, std::string>::iterator dit;
+                for (dit=directories.begin();dit!=directories.end();dit++) {
+                    std::string dir = dit->first;
+
                     struct stat info;
-                    if (stat(dir.c_str(), &info))
+                    if (this->libc->stat(dir.c_str(), &info))
                     {
                         throw std::runtime_error(std::string("cannot stat: ")+dir);
                     }

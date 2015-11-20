@@ -29,24 +29,8 @@ namespace Springy{
             Fuse& tearDown();
 
             static void thread(Fuse *instance);
-            void determineCaller(uid_t *u=NULL, gid_t *g=NULL, pid_t *p=NULL, mode_t *mask=NULL);
 
             ~Fuse();
-
-            std::string concatPath(const std::string &p1, const std::string &p2);            
-            std::string findPath(std::string file_name, struct stat *buf=NULL, std::string *usedPath=NULL);
-            std::string getMaxFreeSpaceDir(fsblkcnt_t *space=NULL);
-            std::string get_parent_path(const std::string path);
-            std::string get_base_name(const std::string path);
-            int create_parent_dirs(std::string dir, const std::string path);
-            #ifndef WITHOUT_XATTR
-            int copy_xattrs(const std::string from, const std::string to);
-            #endif
-            int dir_is_empty(const std::string path);
-            void reopen_files(const std::string file, const std::string newDirectory);
-            void move_file(int fd, std::string file, std::string directory, fsblkcnt_t wsize);
-
-            int internal_open(const std::string file, mode_t mode, struct fuse_file_info *fi);
 
             void* op_init(struct fuse_conn_info *conn);
             void op_destroy(void *arg);
@@ -73,7 +57,6 @@ namespace Springy{
             int op_link(const std::string from, const std::string to);
             int op_mknod(const std::string path, mode_t mode, dev_t rdev);
             int op_fsync(const std::string path, int isdatasync, struct fuse_file_info *fi);
-
             int op_setxattr(const std::string file_name, const std::string attrname,
 							    const char *attrval, size_t attrvalsize, int flags);
 			int op_getxattr(const std::string file_name, const std::string attrname, char *buf, size_t count);
@@ -154,6 +137,23 @@ namespace Springy{
 
             struct fuse_operations fops;
             struct fuse* fuse;
+            
+            
+            void saveFd(std::string file, std::string usedPath, int fd, int flags);
+            std::string concatPath(const std::string &p1, const std::string &p2);            
+            std::string findPath(std::string file_name, struct stat *buf=NULL, std::string *usedPath=NULL);
+            std::string getMaxFreeSpaceDir(fsblkcnt_t *space=NULL);
+            std::string get_parent_path(const std::string path);
+            std::string get_base_name(const std::string path);
+            int create_parent_dirs(std::string dir, const std::string path);
+            #ifndef WITHOUT_XATTR
+            int copy_xattrs(const std::string from, const std::string to);
+            #endif
+            int dir_is_empty(const std::string path);
+            void reopen_files(const std::string file, const std::string newDirectory);
+            void move_file(int fd, std::string file, std::string directory, fsblkcnt_t wsize);
+
+            void determineCaller(uid_t *u=NULL, gid_t *g=NULL, pid_t *p=NULL, mode_t *mask=NULL);
     };
 
 }
