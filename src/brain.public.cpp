@@ -9,6 +9,8 @@
 
 #include <boost/algorithm/string.hpp>
 
+#include <boost/filesystem.hpp>
+
 namespace Springy{
     boost::optional<int> Brain::exitStatus;
 
@@ -101,8 +103,8 @@ namespace Springy{
                 opts = vm["input"].as<std::vector<std::string> >();
             }
 
-            std::string mountpoint;
-            std::map<std::string, std::string> directories;
+            boost::filesystem::path mountpoint;
+            std::map<boost::filesystem::path, boost::filesystem::path> directories;
 
             switch(opts.size()){
                 case 0:
@@ -110,32 +112,32 @@ namespace Springy{
                 default:
                     {
                         mountpoint = opts[opts.size()-1];
-                        switch(this->libc->access(mountpoint.c_str(), F_OK)){
+                        switch(this->libc->access(mountpoint.string().c_str(), F_OK)){
                             case -1:
                                 if(errno == ENOTCONN){
-                                    std::string fuserumountCommand = std::string("fusermount -u \"")+mountpoint+"\"";
+                                    std::string fuserumountCommand = std::string("fusermount -u \"")+mountpoint.string()+"\"";
                                     this->libc->system(fuserumountCommand.c_str());
-                                    if(this->libc->access(mountpoint.c_str(), F_OK)==0){
+                                    if(this->libc->access(mountpoint.string().c_str(), F_OK)==0){
                                         break;
                                     }
 
-                                    if(this->libc->umount(mountpoint.c_str())!=0){
+                                    if(this->libc->umount(mountpoint.string().c_str())!=0){
                                         std::cerr << strerror(errno) << std::endl;
-                                        throw std::runtime_error(std::string("couldnt unmount given mountpoint: ")+mountpoint);
+                                        throw std::runtime_error(std::string("couldnt unmount given mountpoint: ")+mountpoint.string());
                                     }
                                     if(this->libc->access(mountpoint.c_str(), F_OK)!=0){
-                                        throw std::runtime_error(std::string("inaccessable mount point given: ")+mountpoint);
+                                        throw std::runtime_error(std::string("inaccessable mount point given: ")+mountpoint.string());
                                     }
                                 }
-                                throw std::runtime_error(std::string("inaccessable mount point given: ")+mountpoint);
+                                throw std::runtime_error(std::string("inaccessable mount point given: ")+mountpoint.string());
                         }
 
-                        mountpoint = Util::File::realpath(mountpoint);
+                        mountpoint = boost::filesystem::canonical(mountpoint);
                         for(unsigned int i=0;i<opts.size()-1;i++){
-                            std::string file = opts[i];
-                            std::vector<std::string> tmpdirs;
+                            boost:filesystem::path file(opts[i]);
+                            std::vector<boost::filesystem::path> tmpdirs;
                             try{
-                                file = Util::File::realpath(file);
+                                file = boost::filesystem::canonical(file);
                                 tmpdirs.push_back(file);
                             }catch(...){
                                 boost::split( tmpdirs, opts[0], boost::is_any_of(","), boost::token_compress_on );
@@ -143,7 +145,7 @@ namespace Springy{
 
                             for(unsigned int i=0;i<tmpdirs.size();i++){
                                 std::string virtualmountpoint = "/";
-                                std::string directory = Util::File::realpath(Util::String::urldecode(tmpdirs[i]));
+                                std::string directory = boost::filesystem::canonical(Util::String::urldecode(tmpdirs[i]));
                                 size_t pos = directory.find("=");
                                 if(pos != std::string::npos){
                                     virtualmountpoint = directory.substr(0, pos);

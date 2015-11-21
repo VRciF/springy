@@ -12,6 +12,8 @@
 #include <boost/multi_index/identity.hpp>
 #include <boost/multi_index/member.hpp>
 
+#include <boost/filesystem.hpp>
+
 #include "settings.hpp"
 #include "libc/ilibc.hpp"
 
@@ -138,11 +140,11 @@ namespace Springy{
             struct fuse_operations fops;
             struct fuse* fuse;
             
-            
+            int countNonRootPathElements(boost::filesystem::path p);
             void saveFd(std::string file, std::string usedPath, int fd, int flags);
-            std::string concatPath(const std::string &p1, const std::string &p2);            
+            boost::filesystem::path concatPath(const boost::filesystem::path &p1, const boost::filesystem::path &p2);
             std::string findPath(std::string file_name, struct stat *buf=NULL, std::string *usedPath=NULL);
-            std::string getMaxFreeSpaceDir(fsblkcnt_t *space=NULL);
+            std::string getMaxFreeSpaceDir(std::string path, fsblkcnt_t *space=NULL);
             std::string get_parent_path(const std::string path);
             std::string get_base_name(const std::string path);
             int create_parent_dirs(std::string dir, const std::string path);

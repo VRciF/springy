@@ -176,7 +176,20 @@ void Fuse::determineCaller(uid_t *u, gid_t *g, pid_t *p, mode_t *mask){
 
 Fuse::~Fuse(){}
 
-std::string Fuse::concatPath(const std::string &p1, const std::string &p2){
+int Fuse::countNonRootPathElements(boost::filesystem::path p){
+	int depth = 0;
+
+	while(p.has_relative_path()){
+		depth++;
+		p = p.branch_path();
+	}
+
+	return depth;
+}
+
+boost::filesystem::path Fuse::concatPath(const boost::filesystem::path &p1, const boost::filesystem::path &p2){
+	return boost::filesystem::path(p1/p2).relative_path();
+/*
     std::string rval = p1;
     if(rval[rval.size()-1]!='/'){ rval += "/"; }
     if(p2[0]=='/'){
@@ -187,6 +200,7 @@ std::string Fuse::concatPath(const std::string &p1, const std::string &p2){
     }
 
     return rval;
+*/
 }
 std::string Fuse::findPath(std::string file_name, struct stat *buf, std::string *usedPath){
 	struct stat b;
@@ -196,6 +210,7 @@ std::string Fuse::findPath(std::string file_name, struct stat *buf, std::string 
 	Synchronized sDirs(directories, Synchronized::LockType::READ);
 
     std::map<std::string, std::string>::iterator it;
+    std::string foundPath;
 	for(it=directories.begin();it != directories.end();it++){
 		std::string path;
 		if(file_name!="/" && it->second.find(file_name)){
@@ -206,16 +221,17 @@ std::string Fuse::findPath(std::string file_name, struct stat *buf, std::string 
 
 		path = this->concatPath(it->first, file_name);
 
-		if(this->libc->lstat(path.c_str(), buf) != -1){
+		if(this->libc->lstat(path.c_str(), buf) != -1 && ){
 			if(usedPath!=NULL){
 				usedPath->assign(it->first);
 			}
-			return path;
+			foundPath = path;
 		}
     }
+    if(foundPath.length()>0){ return foundPath; }
     throw std::runtime_error("file not found");
 }
-std::string Fuse::getMaxFreeSpaceDir(fsblkcnt_t *space){
+std::string Fuse::getMaxFreeSpaceDir(std::string path, fsblkcnt_t *space){
 	std::map<std::string, std::string> &directories = this->config->option<std::map<std::string, std::string> >("directories");
 	Synchronized sDirs(directories, Synchronized::LockType::READ);
 
