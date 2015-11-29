@@ -259,8 +259,12 @@ std::string Fuse::getMaxFreeSpaceDir(std::string path, fsblkcnt_t *space){
 
     throw std::runtime_error("no space");
 }
-std::string Fuse::get_parent_path(const std::string path)
+boost::filesystem::path Fuse::get_parent_path(const boost::filesystem::path path)
 {
+    boost::filesystem::path = p.parent_path();
+    if(p.is_empty){ throw std::runtime_error("no parent directory"); }
+    return p;
+/*
 	std::string dir = path;
 	int len=dir.size();
 	if (len && dir[len-1]=='/'){ --len; dir.pop_back(); }
@@ -269,10 +273,13 @@ std::string Fuse::get_parent_path(const std::string path)
 	if (len) return dir;
 
 	throw std::runtime_error("no parent directory");
+*/
 }
 
-std::string Fuse::get_base_name(const std::string path)
+boost::filesystem::path Fuse::get_base_name(const boost::filesystem::path p)
 {
+    return p.filename();
+/*
 	std::string dir = path;
 	int len = dir.size();
 	if (len && dir[len-1]=='/'){ --len; dir.pop_back(); }
@@ -282,6 +289,7 @@ std::string Fuse::get_base_name(const std::string path)
         dir = dir.substr(filePos+1);
 	}
 	return dir;
+*/
 }
 
 int Fuse::create_parent_dirs(std::string dir, const std::string path)
@@ -353,7 +361,7 @@ int Fuse::copy_xattrs(const std::string from, const std::string to)
                 return 0;
 
         // get all extended attributes
-        listbuf=(char *)calloc(sizeof(char), listsize);
+        listbuf=(char *)this->libc->calloc(sizeof(char), listsize);
         if (this->libc->listxattr(from.c_str(), listbuf, listsize) == -1)
         {
                 return -1;
@@ -399,9 +407,9 @@ int Fuse::copy_xattrs(const std::string from, const std::string to)
         return 0;
 }
 #endif
-int Fuse::dir_is_empty(const std::string path)
+int Fuse::dir_is_empty(const boost::filesystem::path p)
 {
-	DIR * dir = opendir(path.c_str());
+	DIR * dir = this->libc->opendir(p.string().c_str());
 	struct dirent *de;
 	if (!dir)
 		return -1;
