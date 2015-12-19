@@ -134,7 +134,7 @@ namespace Springy{
 
                         mountpoint = boost::filesystem::canonical(mountpoint);
                         for(unsigned int i=0;i<opts.size()-1;i++){
-                            boost:filesystem::path file(opts[i]);
+                            boost::filesystem::path file(opts[i]);
                             std::vector<boost::filesystem::path> tmpdirs;
                             try{
                                 file = boost::filesystem::canonical(file);
@@ -145,36 +145,37 @@ namespace Springy{
 
                             for(unsigned int i=0;i<tmpdirs.size();i++){
                                 std::string virtualmountpoint = "/";
-                                std::string directory = boost::filesystem::canonical(Util::String::urldecode(tmpdirs[i]));
+                                std::string directory = Util::String::urldecode(tmpdirs[i].string());
                                 size_t pos = directory.find("=");
                                 if(pos != std::string::npos){
                                     virtualmountpoint = directory.substr(0, pos);
                                     directory = directory.substr(pos+1);
                                 }
+                                directory = boost::filesystem::canonical(directory).string();
 
-                                if(directory.find(mountpoint)!=std::string::npos){
+                                if(directory.find(mountpoint.string())!=std::string::npos){
                                     throw std::runtime_error(std::string("directory within mountpoint not allowed: ")+directory);
                                 }
 
-                                directories.insert(std::make_pair(directory, virtualmountpoint));
+                                directories.insert(std::make_pair(boost::filesystem::path(directory), boost::filesystem::path(virtualmountpoint)));
                             }
                         }
                     }
                     break;
                 }
 
-                std::map<std::string, std::string>::iterator dit;
+                std::map<boost::filesystem::path, boost::filesystem::path>::iterator dit;
                 for (dit=directories.begin();dit!=directories.end();dit++) {
-                    std::string dir = dit->first;
+                    boost::filesystem::path dir = dit->first;
 
                     struct stat info;
-                    if (this->libc->stat(dir.c_str(), &info))
+                    if (this->libc->stat(dir.string().c_str(), &info))
                     {
-                        throw std::runtime_error(std::string("cannot stat: ")+dir);
+                        throw std::runtime_error(std::string("cannot stat: ")+dir.string());
                     }
                     if (!S_ISDIR(info.st_mode))
                     {
-                        throw std::runtime_error(std::string("not a directory: ")+dir);
+                        throw std::runtime_error(std::string("not a directory: ")+dir.string());
                     }
                 }
 

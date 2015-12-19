@@ -36,34 +36,34 @@ namespace Springy{
 
             void* op_init(struct fuse_conn_info *conn);
             void op_destroy(void *arg);
-            int op_getattr(const std::string file_name, struct stat *buf);
-            int op_statfs(const std::string path, struct statvfs *buf);
-            int op_readdir(const std::string dirname, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info * fi);
-			int op_readlink(const std::string path, char *buf, size_t size);
-            int op_create(const std::string file, mode_t mode, struct fuse_file_info *fi);
-            int op_open(const std::string file, struct fuse_file_info *fi);
-            int op_release(const std::string path, struct fuse_file_info *fi);
-            int op_read(const std::string, char *buf, size_t count, off_t offset, struct fuse_file_info *fi);
-            int op_write(const std::string file, const char *buf, size_t count, off_t offset, struct fuse_file_info *fi);
-            int op_truncate(const std::string path, off_t size);
-            int op_ftruncate(const std::string path, off_t size, struct fuse_file_info *fi);
-            int op_access(const std::string path, int mask);
-            int op_mkdir(const std::string path, mode_t mode);
-            int op_rmdir(const std::string path);
-            int op_unlink(const std::string path);
-            int op_rename(const std::string from, const std::string to);
-            int op_utimens(const std::string path, const struct timespec ts[2]);
-            int op_chmod(const std::string path, mode_t mode);
-            int op_chown(const std::string path, uid_t uid, gid_t gid);
-            int op_symlink(const std::string from, const std::string to);
-            int op_link(const std::string from, const std::string to);
-            int op_mknod(const std::string path, mode_t mode, dev_t rdev);
-            int op_fsync(const std::string path, int isdatasync, struct fuse_file_info *fi);
-            int op_setxattr(const std::string file_name, const std::string attrname,
+            int op_getattr(const boost::filesystem::path file_name, struct stat *buf);
+            int op_statfs(const boost::filesystem::path path, struct statvfs *buf);
+            int op_readdir(const boost::filesystem::path dirname, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info * fi);
+			int op_readlink(const boost::filesystem::path path, char *buf, size_t size);
+            int op_create(const boost::filesystem::path file, mode_t mode, struct fuse_file_info *fi);
+            int op_open(const boost::filesystem::path file, struct fuse_file_info *fi);
+            int op_release(const boost::filesystem::path path, struct fuse_file_info *fi);
+            int op_read(const boost::filesystem::path, char *buf, size_t count, off_t offset, struct fuse_file_info *fi);
+            int op_write(const boost::filesystem::path file, const char *buf, size_t count, off_t offset, struct fuse_file_info *fi);
+            int op_truncate(const boost::filesystem::path path, off_t size);
+            int op_ftruncate(const boost::filesystem::path path, off_t size, struct fuse_file_info *fi);
+            int op_access(const boost::filesystem::path path, int mask);
+            int op_mkdir(const boost::filesystem::path path, mode_t mode);
+            int op_rmdir(const boost::filesystem::path path);
+            int op_unlink(const boost::filesystem::path path);
+            int op_rename(const boost::filesystem::path from, const boost::filesystem::path to);
+            int op_utimens(const boost::filesystem::path path, const struct timespec ts[2]);
+            int op_chmod(const boost::filesystem::path path, mode_t mode);
+            int op_chown(const boost::filesystem::path path, uid_t uid, gid_t gid);
+            int op_symlink(const boost::filesystem::path from, const boost::filesystem::path to);
+            int op_link(const boost::filesystem::path from, const boost::filesystem::path to);
+            int op_mknod(const boost::filesystem::path path, mode_t mode, dev_t rdev);
+            int op_fsync(const boost::filesystem::path path, int isdatasync, struct fuse_file_info *fi);
+            int op_setxattr(const boost::filesystem::path file_name, const std::string attrname,
 							    const char *attrval, size_t attrvalsize, int flags);
-			int op_getxattr(const std::string file_name, const std::string attrname, char *buf, size_t count);
-			int op_listxattr(const std::string file_name, char *buf, size_t count);
-			int op_removexattr(const std::string file_name, const std::string attrname);
+			int op_getxattr(const boost::filesystem::path file_name, const std::string attrname, char *buf, size_t count);
+			int op_listxattr(const boost::filesystem::path file_name, char *buf, size_t count);
+			int op_removexattr(const boost::filesystem::path file_name, const std::string attrname);
 
 
             static void* init(struct fuse_conn_info *conn);
@@ -103,7 +103,7 @@ namespace Springy{
 
             bool singleThreaded;
             static const char *fsname;
-            std::string mountpoint;
+            boost::filesystem::path mountpoint;
             char *fmountpoint;
             std::string fuseoptions;
             std::thread th;
@@ -111,9 +111,9 @@ namespace Springy{
             struct of_idx_fuseFile{};
             struct of_idx_fd{};
             struct openFile{
-                std::string fuseFile;
+                boost::filesystem::path fuseFile;
 
-                mutable std::string path;
+                mutable boost::filesystem::path path;
 
                 int fd; // file descriptor is unique
                 int flags;
@@ -131,7 +131,7 @@ namespace Springy{
                 boost::multi_index::ordered_unique<boost::multi_index::tag<of_idx_fd>, boost::multi_index::member<openFile,int,&openFile::fd> >,
                 
                 // sort by less<string> on name
-                boost::multi_index::ordered_non_unique<boost::multi_index::tag<of_idx_fuseFile>,boost::multi_index::member<openFile,std::string,&openFile::fuseFile> >
+                boost::multi_index::ordered_non_unique<boost::multi_index::tag<of_idx_fuseFile>,boost::multi_index::member<openFile,boost::filesystem::path,&openFile::fuseFile> >
               > 
             > openFiles_set;
 
@@ -140,20 +140,20 @@ namespace Springy{
             struct fuse_operations fops;
             struct fuse* fuse;
             
-            int countNonRootPathElements(boost::filesystem::path p);
-            void saveFd(std::string file, std::string usedPath, int fd, int flags);
+            int countDirectoryElements(boost::filesystem::path p);
+            void saveFd(boost::filesystem::path file, boost::filesystem::path usedPath, int fd, int flags);
             boost::filesystem::path concatPath(const boost::filesystem::path &p1, const boost::filesystem::path &p2);
-            std::string findPath(std::string file_name, struct stat *buf=NULL, std::string *usedPath=NULL);
-            std::string getMaxFreeSpaceDir(std::string path, fsblkcnt_t *space=NULL);
-            std::string get_parent_path(const std::string path);
-            std::string get_base_name(const std::string path);
-            int create_parent_dirs(std::string dir, const std::string path);
+            boost::filesystem::path findPath(boost::filesystem::path file_name, struct stat *buf=NULL, boost::filesystem::path *usedPath=NULL);
+            boost::filesystem::path getMaxFreeSpaceDir(boost::filesystem::path path, fsblkcnt_t *space=NULL);
+            boost::filesystem::path get_parent_path(const boost::filesystem::path path);
+            boost::filesystem::path get_base_name(const boost::filesystem::path path);
+            int create_parent_dirs(boost::filesystem::path dir, const boost::filesystem::path path);
             #ifndef WITHOUT_XATTR
-            int copy_xattrs(const std::string from, const std::string to);
+            int copy_xattrs(const boost::filesystem::path from, const boost::filesystem::path to);
             #endif
-            int dir_is_empty(const std::string path);
-            void reopen_files(const std::string file, const std::string newDirectory);
-            void move_file(int fd, std::string file, std::string directory, fsblkcnt_t wsize);
+            int dir_is_empty(const boost::filesystem::path path);
+            void reopen_files(const boost::filesystem::path file, const boost::filesystem::path newDirectory);
+            void move_file(int fd, boost::filesystem::path file, boost::filesystem::path directory, fsblkcnt_t wsize);
 
             void determineCaller(uid_t *u=NULL, gid_t *g=NULL, pid_t *p=NULL, mode_t *mask=NULL);
     };

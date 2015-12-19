@@ -176,12 +176,12 @@ void Fuse::determineCaller(uid_t *u, gid_t *g, pid_t *p, mode_t *mask){
 
 Fuse::~Fuse(){}
 
-int Fuse::countNonRootPathElements(boost::filesystem::path p){
+int Fuse::countDirectoryElements(boost::filesystem::path p){
 	int depth = 0;
 
 	while(p.has_relative_path()){
 		depth++;
-		p = p.branch_path();
+		p = p.parent_path();
 	}
 
 	return depth;
@@ -202,60 +202,76 @@ boost::filesystem::path Fuse::concatPath(const boost::filesystem::path &p1, cons
     return rval;
 */
 }
-std::string Fuse::findPath(std::string file_name, struct stat *buf, std::string *usedPath){
+boost::filesystem::path Fuse::findPath(boost::filesystem::path file_name, struct stat *buf, boost::filesystem::path *usedPath){
 	struct stat b;
 	if(buf==NULL){ buf = &b; }
+	
+	int cntFileNameParts = this->countDirectoryElements(file_name);
 
-	std::map<std::string, std::string> &directories = this->config->option<std::map<std::string, std::string> >("directories");
+	std::map<boost::filesystem::path, boost::filesystem::path> &directories = this->config->option<std::map<boost::filesystem::path, boost::filesystem::path> >("directories");
 	Synchronized sDirs(directories, Synchronized::LockType::READ);
 
-    std::map<std::string, std::string>::iterator it;
-    std::string foundPath;
+    std::map<boost::filesystem::path, boost::filesystem::path>::iterator it;
+    boost::filesystem::path foundPath;
+    int distanceToSelectedPath = -1;
 	for(it=directories.begin();it != directories.end();it++){
-		std::string path;
-		if(file_name!="/" && it->second.find(file_name)){
-			path = file_name;
-			file_name = std::string();
+		boost::filesystem::path workingPath;
+		bool isVirtual = false;
+		int depth = this->countDirectoryElements(it->second);
+		if(it->second.string().find(file_name.string()) == std::string::npos){
+			int distance = this->libc.abs(depth-cntFileNameParts);
+			if(distanceToSelectedPath==-1 || distance<distanceToSelectedPath){
+				distanceToSelectedPath = distance;
+				workingPath = it->first/file_name;
+			}
 		}
-		else if(file_name.find(it->second)!=0){ continue; }
+		else if(file_name.string().find(it->second.string()) != std::string::npos){
+			isVirtual = true;
+			int distance = this->libc.abs(depth-cntFileNameParts);
+			if(distanceToSelectedPath==-1 || distance<distanceToSelectedPath){
+				distanceToSelectedPath = distance;
+				workingPath = file_name;
+			}			
+		}
+		else{
+			continue;
+		}
 
-		path = this->concatPath(it->first, file_name);
-
-		if(this->libc->lstat(path.c_str(), buf) != -1 && ){
+        // for virtual directories the permission shall be those of the mountpoint
+		if((isVirtual && this->libc->lstat(this->mountpoint.string().c_str(), buf)!=-1) ||
+		   this->libc->lstat(workingPath.c_str(), buf) != -1 && ){
 			if(usedPath!=NULL){
+				//if(isVirtual){ usedPath->assign(file_name); }
+				//else{ usedPath->assign(it->first); }
 				usedPath->assign(it->first);
 			}
-			foundPath = path;
+			foundPath = workingPath;
 		}
     }
-    if(foundPath.length()>0){ return foundPath; }
+    if(!foundPath.is_empty()){ return foundPath; }
     throw std::runtime_error("file not found");
 }
-std::string Fuse::getMaxFreeSpaceDir(std::string path, fsblkcnt_t *space){
-	std::map<std::string, std::string> &directories = this->config->option<std::map<std::string, std::string> >("directories");
+boost::filesystem::path Fuse::getMaxFreeSpaceDir(boost::filesystem::path path, uintmax_t *space){
+	std::map<boost::filesystem::path, boost::filesystem::path> &directories = this->config->option<std::map<boost::filesystem::path, boost::filesystem::path> >("directories");
 	Synchronized sDirs(directories, Synchronized::LockType::READ);
 
-    std::string maxFreeSpaceDir;
-    fsblkcnt_t max_space = 0;
+    boost::filesystem::path maxFreeSpaceDir;
+    uintmax_t max_space = 0;
     if(space==NULL){
         space = &max_space;
     }
     *space = 0;
 
-    std::map<std::string, std::string>::iterator it;
+    std::map<boost::filesystem::path, boost::filesystem::path>::iterator it;
 	for(it=directories.begin();it != directories.end();it++){
-        struct statvfs stf;
-		if (statvfs(it->first.c_str(), &stf) != 0)
-			continue;
-		fsblkcnt_t curspace  = stf.f_bsize;
-		curspace *= stf.f_bavail;
-        
+		uintmax_t curspace = boost::filesystem::space(it->first).available;
+
         if(curspace>*space){
             maxFreeSpaceDir = it->first;
             *space = curspace;
         }
     }
-    if(maxFreeSpaceDir.size()>0){ return maxFreeSpaceDir; }
+    if(!maxFreeSpaceDir.is_empty()){ return maxFreeSpaceDir; }
 
     throw std::runtime_error("no space");
 }
@@ -423,7 +439,7 @@ int Fuse::dir_is_empty(const boost::filesystem::path p)
 	this->libc->closedir(dir);
 	return 1;
 }
-void Fuse::reopen_files(const std::string file, const std::string newDirectory)
+void Fuse::reopen_files(const boost::filesystem::path file, const boost::filesystem::path newDirectory)
 {
     std::string newFile = this->concatPath(newDirectory, file);
     Synchronized syncOpenFiles(this->openFiles);
@@ -469,7 +485,7 @@ void Fuse::reopen_files(const std::string file, const std::string newDirectory)
     }
 }
 
-void Fuse::saveFd(std::string file, std::string usedPath, int fd, int flags){
+void Fuse::saveFd(boost::filesystem::path file, boost::filesystem::path usedPath, int fd, int flags){
     Synchronized syncOpenFiles(this->openFiles);
 
     int *syncToken = NULL;
@@ -486,7 +502,7 @@ void Fuse::saveFd(std::string file, std::string usedPath, int fd, int flags){
     this->openFiles.insert(of);
 }
 
-void Fuse::move_file(int fd, std::string file, std::string directory, fsblkcnt_t wsize)
+void Fuse::move_file(int fd, boost::filesystem::path file, boost::filesystem::path directory, fsblkcnt_t wsize)
 {
 	char *buf = NULL;
 	ssize_t size;
@@ -623,12 +639,12 @@ void Fuse::op_destroy(void *arg){
 	//mhddfs_httpd_stopServer();
 }
 
-int Fuse::op_getattr(const std::string file_name, struct stat *buf)
+int Fuse::op_getattr(const boost::filesystem::path file_name, struct stat *buf)
 {
     if(buf==NULL){ return -EINVAL; }
 
 	try{
-		std::string path = this->findPath(file_name, buf);
+		this->findPath(file_name, buf);
 		return 0;
 	}
 	catch(...){}
@@ -636,7 +652,7 @@ int Fuse::op_getattr(const std::string file_name, struct stat *buf)
     return -ENOENT;
 }
 
-int Fuse::op_statfs(const std::string path, struct statvfs *buf)
+int Fuse::op_statfs(const boost::filesystem::path path, struct statvfs *buf)
 {
     if(buf==NULL){ return -EINVAL; }
 
@@ -723,7 +739,7 @@ int Fuse::op_statfs(const std::string path, struct statvfs *buf)
 }
 
 int Fuse::op_readdir(
-		const std::string dirname,
+		const boost::filesystem::path dirname,
 		void *buf,
 		fuse_fill_dir_t filler,
 		off_t offset,
@@ -795,7 +811,7 @@ int Fuse::op_readdir(
 	return 0;
 }
 
-int Fuse::op_readlink(const std::string path, char *buf, size_t size)
+int Fuse::op_readlink(const boost::filesystem::path path, char *buf, size_t size)
 {
     if(buf==NULL){ return -EINVAL; }
 
@@ -813,7 +829,7 @@ int Fuse::op_readlink(const std::string path, char *buf, size_t size)
 	return -ENOENT;
 }
 
-int Fuse::op_create(const std::string file, mode_t mode, struct fuse_file_info *fi)
+int Fuse::op_create(const boost::filesystem::path file, mode_t mode, struct fuse_file_info *fi)
 {
     try{
         this->findPath(file);
@@ -854,7 +870,7 @@ int Fuse::op_create(const std::string file, mode_t mode, struct fuse_file_info *
     return this->op_open(file, fi);
 }
 
-int Fuse::op_open(const std::string file, struct fuse_file_info *fi)
+int Fuse::op_open(const boost::filesystem::path file, struct fuse_file_info *fi)
 {
     fi->fh = 0;
 
@@ -945,7 +961,7 @@ int Fuse::op_open(const std::string file, struct fuse_file_info *fi)
 	return 0;
 }
 
-int Fuse::op_release(const std::string path, struct fuse_file_info *fi)
+int Fuse::op_release(const boost::filesystem::path path, struct fuse_file_info *fi)
 {
     int fd = fi->fh;
 
@@ -975,7 +991,7 @@ int Fuse::op_release(const std::string path, struct fuse_file_info *fi)
 	return 0;
 }
 
-int Fuse::op_read(const std::string, char *buf, size_t count, off_t offset, struct fuse_file_info *fi)
+int Fuse::op_read(const boost::filesystem::path, char *buf, size_t count, off_t offset, struct fuse_file_info *fi)
 {
     if(buf==NULL){ return -EINVAL; }
 
@@ -1000,7 +1016,7 @@ int Fuse::op_read(const std::string, char *buf, size_t count, off_t offset, stru
 	return res;
 }
 
-int Fuse::op_write(const std::string file, const char *buf, size_t count, off_t offset, struct fuse_file_info *fi)
+int Fuse::op_write(const boost::filesystem::path file, const char *buf, size_t count, off_t offset, struct fuse_file_info *fi)
 {
     if(buf==NULL){ return -EINVAL; }
 
@@ -1071,7 +1087,7 @@ int Fuse::op_write(const std::string file, const char *buf, size_t count, off_t 
     return res;
 }
 
-int Fuse::op_truncate(const std::string path, off_t size)
+int Fuse::op_truncate(const boost::filesystem::path path, off_t size)
 {
     try{
         std::string file = this->findPath(path);
@@ -1084,7 +1100,7 @@ int Fuse::op_truncate(const std::string path, off_t size)
     errno = ENOENT;
     return -errno;
 }
-int Fuse::op_ftruncate(const std::string path, off_t size, struct fuse_file_info *fi)
+int Fuse::op_ftruncate(const boost::filesystem::path path, off_t size, struct fuse_file_info *fi)
 {
     int fd = fi->fh;
     try{
@@ -1104,7 +1120,7 @@ int Fuse::op_ftruncate(const std::string path, off_t size, struct fuse_file_info
 	return 0;
 }
 
-int Fuse::op_access(const std::string path, int mask)
+int Fuse::op_access(const boost::filesystem::path path, int mask)
 {
     try{
         std::string file = this->findPath(path);
@@ -1118,7 +1134,7 @@ int Fuse::op_access(const std::string path, int mask)
     return -errno;
 }
 
-int Fuse::op_mkdir(const std::string path, mode_t mode)
+int Fuse::op_mkdir(const boost::filesystem::path path, mode_t mode)
 {
     try{
         this->findPath(path);
@@ -1165,7 +1181,7 @@ int Fuse::op_mkdir(const std::string path, mode_t mode)
 
 	return -errno;
 }
-int Fuse::op_rmdir(const std::string path)
+int Fuse::op_rmdir(const boost::filesystem::path path)
 {
     std::string dir;
     int res = 0;
@@ -1181,7 +1197,7 @@ int Fuse::op_rmdir(const std::string path)
     return -ENOENT;
 }
 
-int Fuse::op_unlink(const std::string path)
+int Fuse::op_unlink(const boost::filesystem::path path)
 {
     int res = 0;
 
@@ -1197,7 +1213,7 @@ int Fuse::op_unlink(const std::string path)
 	return 0;
 }
 
-int Fuse::op_rename(const std::string from, const std::string to)
+int Fuse::op_rename(const boost::filesystem::path from, const boost::filesystem::path to)
 {
     int res;
 	struct stat sto, sfrom;
@@ -1290,7 +1306,7 @@ int Fuse::op_rename(const std::string from, const std::string to)
 	return 0;
 }
 
-int Fuse::op_utimens(const std::string path, const struct timespec ts[2])
+int Fuse::op_utimens(const boost::filesystem::path path, const struct timespec ts[2])
 {
 	size_t flag_found;
     int res;
@@ -1319,7 +1335,7 @@ int Fuse::op_utimens(const std::string path, const struct timespec ts[2])
 	return -errno;
 }
 
-int Fuse::op_chmod(const std::string path, mode_t mode)
+int Fuse::op_chmod(const boost::filesystem::path path, mode_t mode)
 {
 	size_t flag_found;
     int res;
@@ -1347,7 +1363,7 @@ int Fuse::op_chmod(const std::string path, mode_t mode)
 	return -errno;
 }
 
-int Fuse::op_chown(const std::string path, uid_t uid, gid_t gid)
+int Fuse::op_chown(const boost::filesystem::path path, uid_t uid, gid_t gid)
 {
 	size_t flag_found;
     int res;
@@ -1374,7 +1390,7 @@ int Fuse::op_chown(const std::string path, uid_t uid, gid_t gid)
 	return -errno;
 }
 
-int Fuse::op_symlink(const std::string oldname, const std::string newname)
+int Fuse::op_symlink(const boost::filesystem::path oldname, const boost::filesystem::path newname)
 {
 	int i, res;
     
@@ -1411,7 +1427,7 @@ int Fuse::op_symlink(const std::string oldname, const std::string newname)
 	return -errno;
 }
 
-int Fuse::op_link(const std::string oldname, const std::string newname)
+int Fuse::op_link(const boost::filesystem::path oldname, const boost::filesystem::path newname)
 {
     int res = 0;
     std::string usedPath;
@@ -1438,7 +1454,7 @@ int Fuse::op_link(const std::string oldname, const std::string newname)
 	return -errno;
 }
 
-int Fuse::op_mknod(const std::string path, mode_t mode, dev_t rdev)
+int Fuse::op_mknod(const boost::filesystem::path path, mode_t mode, dev_t rdev)
 {
 	int res, i;
     std::string parent, directory;
@@ -1495,7 +1511,7 @@ int Fuse::op_mknod(const std::string path, mode_t mode, dev_t rdev)
 #define HAVE_FDATASYNC 1
 #endif
 
-int Fuse::op_fsync(const std::string path, int isdatasync, struct fuse_file_info *fi)
+int Fuse::op_fsync(const boost::filesystem::path path, int isdatasync, struct fuse_file_info *fi)
 {
     int fd = fi->fh;
     try{
@@ -1525,7 +1541,7 @@ int Fuse::op_fsync(const std::string path, int isdatasync, struct fuse_file_info
 }
 
 #ifndef WITHOUT_XATTR
-int Fuse::op_setxattr(const std::string file_name, const std::string attrname,
+int Fuse::op_setxattr(const boost::filesystem::path file_name, const std::string attrname,
                 const char *attrval, size_t attrvalsize, int flags)
 {
 	try{
@@ -1537,7 +1553,7 @@ int Fuse::op_setxattr(const std::string file_name, const std::string attrname,
 	return -ENOENT;
 }
 
-int Fuse::op_getxattr(const std::string file_name, const std::string attrname, char *buf, size_t count)
+int Fuse::op_getxattr(const boost::filesystem::path file_name, const std::string attrname, char *buf, size_t count)
 {
 	try{
 		std::string path = this->findPath(file_name);
@@ -1549,7 +1565,7 @@ int Fuse::op_getxattr(const std::string file_name, const std::string attrname, c
 	return -ENOENT;
 }
 
-int Fuse::op_listxattr(const std::string file_name, char *buf, size_t count)
+int Fuse::op_listxattr(const boost::filesystem::path file_name, char *buf, size_t count)
 {
     try{
 		std::string path = this->findPath(file_name);
@@ -1561,7 +1577,7 @@ int Fuse::op_listxattr(const std::string file_name, char *buf, size_t count)
 	return -ENOENT;
 }
 
-int Fuse::op_removexattr(const std::string file_name, const std::string attrname)
+int Fuse::op_removexattr(const boost::filesystem::path file_name, const std::string attrname)
 {
 	try{
 		std::string path = this->findPath(file_name);
@@ -1589,11 +1605,11 @@ void Fuse::destroy(void *arg){
     return instance->destroy(arg);
 }
 
-int Fuse::getattr(const char *file_name, struct stat *buf)
+int Fuse::getattr(const char *path, struct stat *buf)
 {
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_getattr(file_name, buf);
+    return instance->op_getattr(boost::filesystem::path(path), buf);
 }
 int Fuse::statfs(const char *path, struct statvfs *buf)
 {
@@ -1606,61 +1622,61 @@ int Fuse::readdir(const char *dirname, void *buf, fuse_fill_dir_t filler,
                   off_t offset, struct fuse_file_info * fi){
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_readdir(dirname, buf, filler, offset, fi);
+    return instance->op_readdir(boost::filesystem::path(dirname), buf, filler, offset, fi);
 }
 int Fuse::readlink(const char *path, char *buf, size_t size){
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_readlink(path, buf, size);
+    return instance->op_readlink(boost::filesystem::path(path), buf, size);
 }
 
-int Fuse::create(const char *file, mode_t mode, struct fuse_file_info *fi)
+int Fuse::create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_create(file, mode, fi);
+    return instance->op_create(boost::filesystem::path(path), mode, fi);
 }
-int Fuse::open(const char *file, struct fuse_file_info *fi)
+int Fuse::open(const char *path, struct fuse_file_info *fi)
 {
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_open(file, fi);
+    return instance->op_open(boost::filesystem::path(path), fi);
 }
 int Fuse::release(const char *path, struct fuse_file_info *fi)
 {
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_open(path, fi);
+    return instance->op_open(boost::filesystem::path(path), fi);
 }
 int Fuse::read(const char *path, char *buf, size_t count, off_t offset, struct fuse_file_info *fi){
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
     return instance->op_read(path, buf, count, offset, fi);
 }
-int Fuse::write(const char *file, const char *buf, size_t count, off_t offset, struct fuse_file_info *fi){
+int Fuse::write(const char *path, const char *buf, size_t count, off_t offset, struct fuse_file_info *fi){
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_write(file, buf, count, offset, fi);
+    return instance->op_write(boost::filesystem::path(path), buf, count, offset, fi);
 }
 int Fuse::truncate(const char *path, off_t size){
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_truncate(path, size);
+    return instance->op_truncate(boost::filesystem::path(path), size);
 }
 int Fuse::ftruncate(const char *path, off_t size, struct fuse_file_info *fi){
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_ftruncate(path, size, fi);
+    return instance->op_ftruncate(boost::filesystem::path(path), size, fi);
 }
 int Fuse::access(const char *path, int mask){
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_access(path, mask);
+    return instance->op_access(boost::filesystem::path(path), mask);
 }
 int Fuse::mkdir(const char *path, mode_t mode){
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_mkdir(path, mode);
+    return instance->op_mkdir(boost::filesystem::path(path), mode);
 }
 int Fuse::rmdir(const char *path){
     struct fuse_context *ctx = fuse_get_context();
@@ -1675,64 +1691,64 @@ int Fuse::unlink(const char *path){
 int Fuse::rename(const char *from, const char *to){
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_rename(from, to);
+    return instance->op_rename(boost::filesystem::path(from), boost::filesystem::path(to));
 }
 int Fuse::utimens(const char *path, const struct timespec ts[2]){
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_utimens(path, ts);
+    return instance->op_utimens(boost::filesystem::path(path), ts);
 }
 int Fuse::chmod(const char *path, mode_t mode){
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_chmod(path, mode);
+    return instance->op_chmod(boost::filesystem::path(path), mode);
 }
 int Fuse::chown(const char *path, uid_t uid, gid_t gid){
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_chown(path, uid, gid);
+    return instance->op_chown(boost::filesystem::path(path), uid, gid);
 }
 int Fuse::symlink(const char *from, const char *to){
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_symlink(from, to);
+    return instance->op_symlink(boost::filesystem::path(from), boost::filesystem::path(to));
 }
 int Fuse::link(const char *from, const char *to){
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_link(from, to);
+    return instance->op_link(boost::filesystem::path(from), boost::filesystem::path(to));
 }
 int Fuse::mknod(const char *path, mode_t mode, dev_t rdev){
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_mknod(path, mode, rdev);
+    return instance->op_mknod(boost::filesystem::path(path), mode, rdev);
 }
 int Fuse::fsync(const char *path, int isdatasync, struct fuse_file_info *fi){
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_fsync(path, isdatasync, fi);
+    return instance->op_fsync(boost::filesystem::path(path), isdatasync, fi);
 }
 
 int Fuse::setxattr(const char *path, const char *attrname,
 					const char *attrval, size_t attrvalsize, int flags){
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_setxattr(path, attrname, attrval, attrvalsize, flags);
+    return instance->op_setxattr(boost::filesystem::path(path), attrname, attrval, attrvalsize, flags);
 }
 int Fuse::getxattr(const char *path, const char *attrname, char *buf, size_t count){
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_getxattr(path, attrname, buf, count);
+    return instance->op_getxattr(boost::filesystem::path(path), attrname, buf, count);
 }
 int Fuse::listxattr(const char *path, char *buf, size_t count){
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_listxattr(path, buf, count);
+    return instance->op_listxattr(boost::filesystem::path(path), buf, count);
 }
 int Fuse::removexattr(const char *path, const char *attrname){
 	struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_removexattr(path, attrname);
+    return instance->op_removexattr(boost::filesystem::path(path), attrname);
 }
 
 
