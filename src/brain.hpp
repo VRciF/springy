@@ -10,13 +10,16 @@
 
 #include <boost/optional.hpp>
 
+#include <boost/property_tree/ptree.hpp>
+#include <boost/property_tree/xml_parser.hpp>
+#include <boost/foreach.hpp>
+
 #include <iostream>
 #include <fuse.h>
 
 #include "fuse.hpp"
 #include "httpd.hpp"
 #include "libc/ilibc.hpp"
-#include "settings.hpp"
 
 namespace po = boost::program_options;
 
@@ -48,7 +51,8 @@ namespace Springy{
             po::options_description hiddenDesc;
 
             Springy::LibC::ILibC *libc;
-            Settings config;
+            Springy::Settings config;
+
             Fuse fuse;
             Httpd httpd;
 

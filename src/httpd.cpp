@@ -16,6 +16,7 @@
 #include <boost/lexical_cast.hpp>
 
 #include "httpd.hpp"
+#include "exception.hpp"
 
 namespace Springy{
 
@@ -33,8 +34,8 @@ void Httpd::start(){
     this->data.shall_run = true;
 
     int server_port = 8787;
-    if(this->config->exists("httpdPort")){
-        server_port = this->config->option<int>("httpdPort");
+    if(this->config->httpdPort != 0){
+        server_port = this->config->httpdPort;
     }
     std::cout << "server port: " << server_port << std::endl;
 
@@ -49,7 +50,7 @@ void Httpd::start(){
     this->data.serverSocket = ns_bind_opt(&this->data.mgr, serveraddr, Httpd::ev_handler, opts);
     if(this->data.serverSocket==NULL){
         ns_mgr_free(&this->data.mgr);
-        throw std::runtime_error(std::string("binding to port failed: ")+serveraddr);
+        throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "binding to port failed: " << serveraddr;
     }
     ns_set_protocol_http_websocket(this->data.serverSocket);
 
@@ -60,7 +61,7 @@ void Httpd::start(){
       const char *err_str = ns_set_ssl(nc, ssl_cert, NULL);
       if (err_str != NULL) {
         ns_mgr_free(&this->data.mgr);
-        throw std::runtime_error(std::string("Error loading SSL cert: ")+err_str);
+        throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "Error loading SSL cert: " << err_str;
       }
     }
 #endif
@@ -74,7 +75,7 @@ void Httpd::start(){
 
     if(pthread_create(&this->data.thHttpServer, NULL, Httpd::server, this)!=0) {
         ns_mgr_free(&this->data.mgr);
-        throw std::runtime_error("creating server thread failed");
+        throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "creating server thread failed";
     }
 
     this->running = true;
@@ -128,16 +129,15 @@ void Httpd::handle_directory(int what, struct ns_connection *nc, struct http_mes
       switch(what){
           case 1:
           {
-          	  std::map<std::string, std::string> &directories = this->config->option<std::map<std::string, std::string> >("directories");
-              Synchronized sDirs(directories);
-              directories.insert(std::make_pair(directory, vmountpoint));
+              Synchronized sDirs(this->config->directories);
+              
+              this->config->directories.insert(std::make_pair(directory, vmountpoint));
           }
           break;
           case 0:
           {
-          	  std::map<std::string, std::string> &directories = this->config->option<std::map<std::string, std::string> >("directories");
-              Synchronized sDirs(directories);
-              directories.erase(directory);
+              Synchronized sDirs(this->config->directories);
+              this->config->directories.erase(directory);
               /*
               for(std::vector<std::string>::iterator it = directories.begin();it!=directories.end();){
                   if (boost::starts_with(*it, directory)){

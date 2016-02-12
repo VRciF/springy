@@ -2,11 +2,14 @@
 #include "../src/settings.hpp"
 
 #include "../src/libc/libc.hpp"
+#include "../src/util/uri.hpp"
 
 #include <set>
 #include <unistd.h>
 #include <linux/limits.h>
 #include <string.h>
+
+#include <boost/filesystem.hpp>
 
 #define ASSERT(condition) { if(!(condition)){ std::cerr << "ASSERT FAILED: " << #condition << " @ " << __FILE__ << " (" << __LINE__ << "):" << __FUNCTION__ << " | errno=" << strerror(errno) << std::endl; } assert((condition)); }
 
@@ -14,18 +17,17 @@
 class TestMoveFileLibC : public Springy::LibC::LibC{
     public:
         int writecount;
-        virtual ssize_t pwrite(int fd, const void *buf, size_t count, off_t offset){
+        virtual ssize_t pwrite(int LINE, int fd, const void *buf, size_t count, off_t offset){
             this->writecount++;
             if(this->writecount==1){
                 errno = ENOSPC;
                 return -1;
             }
 
-            return Springy::LibC::LibC::pwrite(fd, buf, count, offset);
+            return Springy::LibC::LibC::pwrite(LINE, fd, buf, count, offset);
         }
 };
 
-std::set<std::string> directories;
 char cwd[PATH_MAX];
 std::unordered_map<std::string, struct stat> fillerMap;
 TestMoveFileLibC *libc = new TestMoveFileLibC();
@@ -390,9 +392,7 @@ void test_moveFile(Springy::Fuse &f){
         ASSERT(rval == 0);
 
         libc->writecount = 0;
-        char buffer[128] = {'\0'};
-        snprintf(buffer, sizeof(buffer)-1, "test");
-        rval = f.op_write("/moveFile", buffer, 4, 0, &fi);
+        rval = f.op_write("/moveFile", "test", 4, 0, &fi);
         ASSERT(rval == 4);
 
         struct stat st;
@@ -406,23 +406,226 @@ void test_moveFile(Springy::Fuse &f){
     }
 }
 
+class TestFuse : public Springy::Fuse{
+    protected:
+        Springy::Settings s;
 
+    public:
+        TestFuse() : Springy::Fuse(){
+            this->init(&this->s, ::libc);
+        }
+        void test_findRelevantPaths(){
+            {
+                // simple root directory
+                this->config->directories.clear();
+                this->config->directories.insert(std::make_pair(boost::filesystem::path("/dir1"), boost::filesystem::path("/")));
+
+                std::map<boost::filesystem::path, boost::filesystem::path> result;
+                result = this->findRelevantPaths(boost::filesystem::path("/some/where"));
+                ASSERT(result.size()==1);
+                ASSERT(result.begin()->second.string()=="/");
+                result = this->findRelevantPaths(boost::filesystem::path("/"));
+                ASSERT(result.size()==1);
+                ASSERT(result.begin()->second.string()=="/");
+            }
+
+            {
+                // two simple root directory
+                this->config->directories.clear();
+                this->config->directories.insert(std::make_pair(boost::filesystem::path("/dir1"), boost::filesystem::path("/")));
+                this->config->directories.insert(std::make_pair(boost::filesystem::path("/dir2"), boost::filesystem::path("/")));
+
+                std::map<boost::filesystem::path, boost::filesystem::path> result;
+                result = this->findRelevantPaths(boost::filesystem::path("/some/where"));
+                ASSERT(result.size()==2);
+                ASSERT(result.begin()->first == "/dir1");
+                ASSERT((++result.begin())->first == "/dir2");
+
+                result = this->findRelevantPaths(boost::filesystem::path("/"));
+                ASSERT(result.size()==2);
+                ASSERT(result.begin()->first == "/dir1");
+                ASSERT((++result.begin())->first == "/dir2");
+            }
+
+            {
+                // complicated directory structure with root
+                this->config->directories.clear();
+                this->config->directories.insert(std::make_pair(boost::filesystem::path("/root1"), boost::filesystem::path("/")));
+                this->config->directories.insert(std::make_pair(boost::filesystem::path("/root2"), boost::filesystem::path("/")));
+                this->config->directories.insert(std::make_pair(boost::filesystem::path("/deep1"), boost::filesystem::path("/some/where/deep/in/the/directory/path")));
+                this->config->directories.insert(std::make_pair(boost::filesystem::path("/deep2"), boost::filesystem::path("/some/where/deep/in/the/directory/path")));
+                this->config->directories.insert(std::make_pair(boost::filesystem::path("/diff1"), boost::filesystem::path("/completely/different/path")));
+
+                std::map<boost::filesystem::path, boost::filesystem::path> result;
+                result = this->findRelevantPaths(boost::filesystem::path("/not/specified"));
+                ASSERT(result.size()==2);
+                ASSERT(result.begin()->first == "/root1");
+                ASSERT((++result.begin())->first == "/root2");
+
+                result = this->findRelevantPaths(boost::filesystem::path("/"));
+                ASSERT(result.size()==2);
+                ASSERT(result.begin()->first == "/root1");
+                ASSERT((++result.begin())->first == "/root2");
+
+                result = this->findRelevantPaths(boost::filesystem::path("/some/where/deep/in/the/directory/path/and/even/deeper"));
+                ASSERT(result.size()==2);
+                ASSERT(result.begin()->first == "/deep1");
+                ASSERT((++result.begin())->first == "/deep2");
+
+                result = this->findRelevantPaths(boost::filesystem::path("/completely/different/path/sub/directory"));
+                ASSERT(result.size()==1);
+                ASSERT(result.begin()->first == "/diff1");
+            }
+
+            {
+                // complicated directory structure without root
+                this->config->directories.clear();
+                this->config->directories.insert(std::make_pair(boost::filesystem::path("/deep1"), boost::filesystem::path("/some/where/deep/in/the/directory/path")));
+                this->config->directories.insert(std::make_pair(boost::filesystem::path("/deep2"), boost::filesystem::path("/some/where/deep/in/the/directory/path")));
+                this->config->directories.insert(std::make_pair(boost::filesystem::path("/diff1"), boost::filesystem::path("/completely/different/path")));
+
+                std::map<boost::filesystem::path, boost::filesystem::path> result;
+                result = this->findRelevantPaths(boost::filesystem::path("/not/specified"));
+                ASSERT(result.size()==0);
+
+                result = this->findRelevantPaths(boost::filesystem::path("/"));
+                ASSERT(result.size()==0);
+
+                result = this->findRelevantPaths(boost::filesystem::path("/some/where/deep"));
+                ASSERT(result.size()==0);
+
+                result = this->findRelevantPaths(boost::filesystem::path("/completely/different"));
+                ASSERT(result.size()==0);
+
+                result = this->findRelevantPaths(boost::filesystem::path("/some/where/deep/in/the/directory/path/and/even/deeper"));
+                ASSERT(result.size()==2);
+                ASSERT(result.begin()->first == "/deep1");
+                ASSERT((++result.begin())->first == "/deep2");
+
+                result = this->findRelevantPaths(boost::filesystem::path("/completely/different/path/sub/directory"));
+                ASSERT(result.size()==1);
+                ASSERT(result.begin()->first == "/diff1");
+            }
+
+            {
+                // cascading directory structure
+                this->config->directories.clear();
+                this->config->directories.insert(std::make_pair(boost::filesystem::path("/where1"), boost::filesystem::path("/some/where")));
+                this->config->directories.insert(std::make_pair(boost::filesystem::path("/where2"), boost::filesystem::path("/some/where/deep")));
+                this->config->directories.insert(std::make_pair(boost::filesystem::path("/where3"), boost::filesystem::path("/some/where/deep/in/the/directory/path")));
+
+                std::map<boost::filesystem::path, boost::filesystem::path> result;
+                result = this->findRelevantPaths(boost::filesystem::path("/not/specified"));
+                ASSERT(result.size()==0);
+
+                result = this->findRelevantPaths(boost::filesystem::path("/"));
+                ASSERT(result.size()==0);
+
+                result = this->findRelevantPaths(boost::filesystem::path("/some"));
+                ASSERT(result.size()==0);
+
+                result = this->findRelevantPaths(boost::filesystem::path("/completely/different"));
+                ASSERT(result.size()==0);
+
+                result = this->findRelevantPaths(boost::filesystem::path("/some/where"));
+                ASSERT(result.size()==1);
+                ASSERT(result.begin()->first == "/where1");
+
+                result = this->findRelevantPaths(boost::filesystem::path("/some/where/deep"));
+                ASSERT(result.size()==1);
+                ASSERT(result.begin()->first == "/where2");
+
+                result = this->findRelevantPaths(boost::filesystem::path("/some/where/deep/in/the/directory"));
+                ASSERT(result.size()==1);
+                ASSERT(result.begin()->first == "/where2");
+
+                result = this->findRelevantPaths(boost::filesystem::path("/some/where/deep/in/the/directory/path/and/even/deeper"));
+                ASSERT(result.size()==1);
+                ASSERT(result.begin()->first == "/where3");
+            }
+        }
+};
+
+void test_Uri(){
+    {
+        Springy::Util::Uri u("http://user:pwd@host:8080/some/path?query=string&#fragment");
+        //std::cout << u.protocol() << " | " << u.username() << " | "
+        //          << u.password() << " | " << u.host() << " | "
+        //          << u.port() << " | " << u.path() << " | "
+        //          << u.query() << " | " << u.fragment() << std::endl;
+        ASSERT(u.protocol() == "http");
+        ASSERT(u.username() == "user");
+        ASSERT(u.password() == "pwd");
+        ASSERT(u.host() == "host");
+        ASSERT(u.port() == 8080);
+        ASSERT(u.path() == "/some/path");
+        ASSERT(u.query() == "query=string&");
+        ASSERT(u.fragment() == "fragment");
+    }
+    {
+        // standard example
+        Springy::Util::Uri u("http://host/some/path");
+        ASSERT(u.protocol() == "http");
+        ASSERT(u.username() == "");
+        ASSERT(u.password() == "");
+        ASSERT(u.host() == "host");
+        ASSERT(u.port() == 0);
+        ASSERT(u.path() == "/some/path");
+        ASSERT(u.query() == "");
+        ASSERT(u.fragment() == "");
+    }
+    {
+        // ftp example
+        Springy::Util::Uri u("ftp://host/some/path");
+        ASSERT(u.protocol() == "ftp");
+        ASSERT(u.username() == "");
+        ASSERT(u.password() == "");
+        ASSERT(u.host() == "host");
+        ASSERT(u.port() == 0);
+        ASSERT(u.path() == "/some/path");
+        ASSERT(u.query() == "");
+        ASSERT(u.fragment() == "");
+    }
+    {
+        // file example
+        Springy::Util::Uri u("file:///some/path/file.log");
+        ASSERT(u.protocol() == "file");
+        ASSERT(u.username() == "");
+        ASSERT(u.password() == "");
+        ASSERT(u.host() == "");
+        ASSERT(u.host() == "");
+        ASSERT(u.port() == 0);
+        ASSERT(u.path() == "/some/path/file.log");
+        ASSERT(u.query() == "");
+        ASSERT(u.fragment() == "");
+    }
+    {
+        Springy::Util::Uri u("/some/path/file.log");
+        ASSERT(u.protocol() == "");
+        ASSERT(u.username() == "");
+        ASSERT(u.password() == "");
+        ASSERT(u.host() == "");
+        ASSERT(u.port() == 0);
+        ASSERT(u.path() == "/some/path/file.log");
+        ASSERT(u.query() == "");
+        ASSERT(u.fragment() == "");
+    }
+}
 
 int main(int argc, char **argv){
     getcwd(cwd, sizeof(cwd));
 
-    directories.insert(std::string(cwd)+"/dir1");
-    directories.insert(std::string(cwd)+"/dir2");
-
     libc->writecount=1;
 
     Springy::Settings s;
-    s.option("directories", directories);
+    s.directories.insert(std::make_pair(boost::filesystem::path(std::string(cwd)+"/dir1"), boost::filesystem::path("/")));  // virtualmount is /
+    s.directories.insert(std::make_pair(boost::filesystem::path(std::string(cwd)+"/dir2"), boost::filesystem::path("/")));  // virtualmount is /
 
     Springy::Fuse f;
     f.init(&s, libc);
 
     test_getattr(f);
+
     test_statfs(f);
     test_readdir(f);
     test_readlink(f);
@@ -444,6 +647,11 @@ int main(int argc, char **argv){
     test_mknod(f);
 
     test_xattr(f);
+
+    TestFuse tf;
+    tf.test_findRelevantPaths();
+    
+    test_Uri();
 
     return 0;
 }

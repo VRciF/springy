@@ -1,6 +1,8 @@
 #ifndef SPRINGY_UTIL_FILE
 #define SPRINGY_UTIL_FILE
 
+#include "exception.hpp"
+
 namespace Springy{
     namespace Util{
         class File{
@@ -8,7 +10,7 @@ namespace Springy{
                 static std::string realpath(std::string file){
                     char *absolutepath = ::realpath(file.c_str(), NULL);
                     if(absolutepath == NULL){
-                        throw std::runtime_error(std::string("file doesnt exist: ")+file);
+                        throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "file doesnt exist: " << file;
                     }
                     file = std::string(absolutepath);
                     ::free(absolutepath);

@@ -1,9 +1,14 @@
 #include "settings.hpp"
 
 namespace Springy{
+    Settings::Settings(){
+        this->httpdPort = 0;
+    }
+/*
     Settings::Settings(std::string id){
         this->bOverwriteSettings = true;
         this->localStorage["id"] = id;
+        this->localStorage["directories"] = std::ref(this->directories);
     }
     Settings::~Settings(){}
 
@@ -16,7 +21,7 @@ namespace Springy{
         Synchronized ro(this->bOverwriteSettings);
 
         if(bOverwriteSettings == boost::indeterminate){
-            throw std::runtime_error("invalid argument given");
+            throw Springy::Exception("invalid argument given", __FILE__, __LINE__);
         }
 
         this->bOverwriteSettings = bOverwriteSettings;
@@ -59,4 +64,6 @@ namespace Springy{
         this->localStorage["id"] = value;
         return *this;
     }
+*/
 }
+

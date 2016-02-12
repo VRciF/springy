@@ -4,12 +4,33 @@
 #include <unordered_map>
 #include <boost/any.hpp>
 #include <boost/logic/tribool.hpp>
+#include <boost/filesystem.hpp>
+
+#include <set>
 
 #include "util/synchronized.hpp"
+#include "exception.hpp"
+#include "volumes.hpp"
 
 namespace Springy{
     class Settings{
+        public:
+            Settings();
+
+            // first entry is the absolute path on the local file system, second entry the virtual mountpoint for the fuse file system
+            //typedef std::map<boost::filesystem::path, boost::filesystem::path> DirectoryMap;
+            //DirectoryMap directories;
+
+            Springy::Volumes volumes;
+
+            boost::filesystem::path mountpoint;
+            std::set<std::string> options;
+            bool foreground;
+
+            int httpdPort;
+
         protected:
+/*
             boost::logic::tribool bOverwriteSettings;
 
             typedef std::unordered_map<std::string, boost::any> storage;
@@ -17,6 +38,8 @@ namespace Springy{
             storage globalStorage;
 
         public:
+            std::map<boost::filesystem::path, boost::filesystem::path> directories;
+
             Settings(std::string id="");
             ~Settings();
 
@@ -34,7 +57,7 @@ namespace Springy{
                     it = this->globalStorage.find(name);
                 }
                 if(it==this->localStorage.end()){
-                    throw std::runtime_error(std::string("unkown option given: ")+name);
+                    throw Springy::Exception(std::string("unkown option given: ")+name, __FILE__, __LINE__);
                 }
 
                 boost::any &rval = it->second;
@@ -50,6 +73,8 @@ namespace Springy{
             // known options
             std::string id();
             Settings& id(std::string value);
+*/
     };
 }
+
 #endif

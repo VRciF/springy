@@ -15,6 +15,9 @@
 #include <boost/filesystem.hpp>
 
 #include "settings.hpp"
+
+#include <map>
+
 #include "libc/ilibc.hpp"
 
 namespace Springy{
@@ -25,7 +28,7 @@ namespace Springy{
             };
         public:
             Fuse();
-            Fuse& init(Settings *config, Springy::LibC::ILibC *libc);
+            Fuse& init(Springy::Settings *config, Springy::LibC::ILibC *libc);
             Fuse& setUp(bool singleThreaded);
             Fuse& run();
             Fuse& tearDown();
@@ -98,7 +101,7 @@ namespace Springy{
 			static int removexattr(const char *path, const char *attrname);
 
         protected:
-            Settings *config;
+            Springy::Settings *config;
             Springy::LibC::ILibC *libc;
 
             bool singleThreaded;
@@ -141,10 +144,13 @@ namespace Springy{
             struct fuse* fuse;
             
             int countDirectoryElements(boost::filesystem::path p);
+            int countEquals(const boost::filesystem::path &p1, const boost::filesystem::path &p2);
             void saveFd(boost::filesystem::path file, boost::filesystem::path usedPath, int fd, int flags);
             boost::filesystem::path concatPath(const boost::filesystem::path &p1, const boost::filesystem::path &p2);
-            boost::filesystem::path findPath(boost::filesystem::path file_name, struct stat *buf=NULL, boost::filesystem::path *usedPath=NULL);
-            boost::filesystem::path getMaxFreeSpaceDir(boost::filesystem::path path, fsblkcnt_t *space=NULL);
+            
+            Springy::Volume::IVolume* findVolume(boost::filesystem::path file_name, struct stat *buf = NULL);
+            Springy::Volume::IVolume* getMaxFreeSpaceVolume(boost::filesystem::path path, uintmax_t *space);
+
             boost::filesystem::path get_parent_path(const boost::filesystem::path path);
             boost::filesystem::path get_base_name(const boost::filesystem::path path);
             int create_parent_dirs(boost::filesystem::path dir, const boost::filesystem::path path);

@@ -2,6 +2,7 @@
 
 #include "util/string.hpp"
 #include "util/file.hpp"
+#include "exception.hpp"
 
 #include <boost/log/core.hpp>
 #include <boost/log/trivial.hpp>
@@ -47,10 +48,10 @@ namespace Springy{
         struct rlimit limit;
 	    limit.rlim_cur = 512000;
 	    limit.rlim_max = 512000;
-	    if(this->libc->setrlimit(RLIMIT_NOFILE, &limit) != 0)
+	    if(this->libc->setrlimit(__LINE__, RLIMIT_NOFILE, &limit) != 0)
 	    {
 		   //this->exitStatus = -1;
-		   std::cerr << "setrlimit failed (i'll continue): " << errno << ":" << strerror(errno) << std::endl;
+		   std::cerr << "setrlimit failed (i'll continue): " << errno << ":" << this->libc->strerror(__LINE__, errno) << std::endl;
 		   //return *this;
 	    }
 
@@ -104,32 +105,31 @@ namespace Springy{
             }
 
             boost::filesystem::path mountpoint;
-            std::map<boost::filesystem::path, boost::filesystem::path> directories;
 
             switch(opts.size()){
                 case 0:
-                    throw std::runtime_error("there must be exactly one mount point and zero or more volume directories");
+                    throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "there must be exactly one mount point and zero or more volume directories";
                 default:
                     {
                         mountpoint = opts[opts.size()-1];
-                        switch(this->libc->access(mountpoint.string().c_str(), F_OK)){
+                        switch(this->libc->access(__LINE__, mountpoint.string().c_str(), F_OK)){
                             case -1:
                                 if(errno == ENOTCONN){
                                     std::string fuserumountCommand = std::string("fusermount -u \"")+mountpoint.string()+"\"";
-                                    this->libc->system(fuserumountCommand.c_str());
-                                    if(this->libc->access(mountpoint.string().c_str(), F_OK)==0){
+                                    this->libc->system(__LINE__, fuserumountCommand.c_str());
+                                    if(this->libc->access(__LINE__, mountpoint.string().c_str(), F_OK)==0){
                                         break;
                                     }
 
-                                    if(this->libc->umount(mountpoint.string().c_str())!=0){
-                                        std::cerr << strerror(errno) << std::endl;
-                                        throw std::runtime_error(std::string("couldnt unmount given mountpoint: ")+mountpoint.string());
+                                    if(this->libc->umount(__LINE__, mountpoint.string().c_str())!=0){
+                                        std::cerr << this->libc->strerror(__LINE__, errno) << std::endl;
+                                        throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "couldnt unmount given mountpoint: " << mountpoint;
                                     }
-                                    if(this->libc->access(mountpoint.c_str(), F_OK)!=0){
-                                        throw std::runtime_error(std::string("inaccessable mount point given: ")+mountpoint.string());
+                                    if(this->libc->access(__LINE__, mountpoint.c_str(), F_OK)!=0){
+                                        throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "inaccessable mount point given: " << mountpoint;
                                     }
                                 }
-                                throw std::runtime_error(std::string("inaccessable mount point given: ")+mountpoint.string());
+                                throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "inaccessable mount point given: " << mountpoint;
                         }
 
                         mountpoint = boost::filesystem::canonical(mountpoint);
@@ -154,35 +154,36 @@ namespace Springy{
                                 directory = boost::filesystem::canonical(directory).string();
 
                                 if(directory.find(mountpoint.string())!=std::string::npos){
-                                    throw std::runtime_error(std::string("directory within mountpoint not allowed: ")+directory);
+                                    throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "directory within mountpoint not allowed: " << directory;
                                 }
 
-                                directories.insert(std::make_pair(boost::filesystem::path(directory), boost::filesystem::path(virtualmountpoint)));
+                                this->config.directories.insert(std::make_pair(boost::filesystem::path(directory), boost::filesystem::path(virtualmountpoint)));
                             }
                         }
                     }
                     break;
                 }
 
-                std::map<boost::filesystem::path, boost::filesystem::path>::iterator dit;
-                for (dit=directories.begin();dit!=directories.end();dit++) {
-                    boost::filesystem::path dir = dit->first;
+                //std::map<boost::filesystem::path, boost::filesystem::path>::iterator dit;
+                //for (dit=directories.begin();dit!=directories.end();dit++) {
+                    //boost::filesystem::path dir = dit->first;
 
-                    struct stat info;
-                    if (this->libc->stat(dir.string().c_str(), &info))
-                    {
-                        throw std::runtime_error(std::string("cannot stat: ")+dir.string());
-                    }
-                    if (!S_ISDIR(info.st_mode))
-                    {
-                        throw std::runtime_error(std::string("not a directory: ")+dir.string());
-                    }
-                }
+                    // allow a directory which doesnt exist - altough this can cause confusion by e.g. typo's
+                    // it might be a more valuable feature to get directories online/offline independent of the stat's of springy
+                    //struct stat info;
+                    //if (this->libc->stat(__LINE__, dir.string().c_str(), &info))
+                    //{
+                    //    throw Springy::Exception(std::string("cannot stat: ")+dir.string(), __FILE__, __LINE__);
+                    //}
+                    //if (!S_ISDIR(info.st_mode))
+                    //{
+                    //    throw Springy::Exception(std::string("not a directory: ")+dir.string(), __FILE__, __LINE__);
+                    //}
+                    //this.config.directories.insert(std::make_pair(dit->first, dit->second));
+                //}
 
-                this->config.option("mountpoint", mountpoint);
-                this->config.option("directories", directories);
+                this->config.mountpoint = mountpoint;
 
-                std::set<std::string> options;
                 std::vector<std::string> cmdoptions;
                 if(vm.count("option")){
                     cmdoptions = vm["option"].as<std::vector<std::string> >();
@@ -191,16 +192,14 @@ namespace Springy{
                 for(unsigned int i=0;i<cmdoptions.size();i++){
                     std::vector<std::string> current;
                     boost::split( current, cmdoptions[i], boost::is_any_of(","), boost::token_compress_on );
-                    std::copy( cmdoptions.begin(), cmdoptions.end(), std::inserter( options, options.end() ) );
+                    std::copy( cmdoptions.begin(), cmdoptions.end(), std::inserter( this->config.options, this->config.options.end() ) );
                 }
-
-                this->config.option("options", options);
 
                 if (vm.count("foreground")) {
-                    this->config.option("foreground", true);
+                    this->config.foreground = true;
                 }
                 else{
-                    this->config.option("foreground", false);
+                    this->config.foreground = false;
                 }
 
                 this->fuse.setUp(vm.count("single")!=0);
@@ -276,7 +275,7 @@ namespace Springy{
         
         this->httpd.start();
 
-        if(false==this->config.option<bool>("foreground")){
+        if(false==this->config.foreground){
             pid_t process_id = fork();
             if(process_id<0){
                 // fork failed
