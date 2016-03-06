@@ -66,6 +66,9 @@ License along with this library.
 #include <sys/time.h>
 #include <errno.h>
 
+#include <execinfo.h>
+#include <unistd.h>
+
 class Synchronized{
     public:
         enum LockType{ READ, WRITE };
@@ -130,6 +133,17 @@ public:
         template<typename T>
         Synchronized(const T &ptr, LockType ltype = WRITE) : ltype(ltype),accessPtr(getAccessPtr(ptr)){
             //std::cout << "type: " << typeid(ptr).name() << std::endl;
+
+            /*{
+              void *array[10];
+              size_t size;
+
+              // get void*'s for all entries on the stack
+              size = backtrace(array, 10);
+
+              // print out all the frames to stderr
+              backtrace_symbols_fd(array, size, STDERR_FILENO);
+            }*/
 
             if(this->accessPtr==NULL){
                 throw std::runtime_error(std::string("Synchronizing on NULL pointer is not valid, referenced type is: ")+typeid(ptr).name());

@@ -5,18 +5,22 @@
 #include "volume/ivolume.hpp"
 #include "libc/ilibc.hpp"
 
+#include <set>
+
 namespace Springy{
     class Volumes{
         protected:
-            typedef struct {
+            struct VolumeConfig{
                 boost::filesystem::path virtualMountPoint;
-                Springy::Util::Uri u;
                 Springy::Volume::IVolume *volume;
-            } VolumeConfig;
+            };
             typedef std::vector<VolumeConfig> VolumesVector;
 
             VolumesVector volumes_vec;
             Springy::LibC::ILibC *libc;
+
+            int countEquals(const boost::filesystem::path &p1, const boost::filesystem::path &p2);
+            int countDirectoryElements(boost::filesystem::path p);
 
         public:
 
@@ -26,7 +30,8 @@ namespace Springy{
             void addVolume(Springy::Util::Uri u, boost::filesystem::path virtualMountPoint=boost::filesystem::path("/"));
             void removeVolume(Springy::Util::Uri u, boost::filesystem::path virtualMountPoint=boost::filesystem::path("/"));
 
-            std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > getVolumesByVirtualFileName(boost::filesystem::path file_name);
+            std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > getVolumesByVirtualFileName(const boost::filesystem::path file_name);
+            std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > getVolumes();
     };
 }
 

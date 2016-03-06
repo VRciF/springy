@@ -40,7 +40,7 @@ namespace Springy{
             void log();
 
             template<typename T>
-            Trace& operator<<(T &arg){
+            Trace& operator<<(T arg){
                 std::thread::id current_thread_id = std::this_thread::get_id();
 
                 Synchronized syncToken(Trace::currentTraces);

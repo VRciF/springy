@@ -9,11 +9,14 @@ namespace Springy{
                      visibleDesc("Springy options")
     {
         this->libc = new Springy::LibC::LibC();
+        this->config = new Springy::Settings(this->libc);
     }
 
     void Brain::printHelp(std::ostream & output){
         output << "Usage: springy [DIR1,DIR2,... MOUNTPOINT] [OPTIONS]" << std::endl;
         output << visibleDesc << std::endl;
+        output << "Springy options:" << std::endl
+               << "-o ro                  mount read only" << std::endl;
         output << "FUSE options:" << std::endl
                << "-o allow_other         allow access to other users" << std::endl
                << "-o allow_root          allow access to root" << std::endl

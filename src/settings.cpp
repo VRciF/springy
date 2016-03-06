@@ -1,7 +1,9 @@
 #include "settings.hpp"
 
+#include "libc/ilibc.hpp"
+
 namespace Springy{
-    Settings::Settings(){
+    Settings::Settings(Springy::LibC::ILibC *libc) : volumes(libc) {
         this->httpdPort = 0;
     }
 /*

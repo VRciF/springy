@@ -4,6 +4,8 @@
 #include "util/file.hpp"
 #include "exception.hpp"
 
+#include <execinfo.h>
+
 #include <boost/log/core.hpp>
 #include <boost/log/trivial.hpp>
 #include <boost/log/expressions.hpp>
@@ -56,7 +58,7 @@ namespace Springy{
 	    }
 
         try{
-            this->fuse.init(&this->config, this->libc);
+            this->fuse.init(this->config, this->libc);
         }catch(std::runtime_error &e){
             std::cerr << e.what() << std::endl;
             this->exitStatus = -1;
@@ -64,7 +66,7 @@ namespace Springy{
         }
 
         try{
-            httpd.init(&this->config);
+            httpd.init(this->config);
         }catch(std::runtime_error &e){
             std::cerr << e.what() << std::endl;
             this->exitStatus = -1;
@@ -157,7 +159,8 @@ namespace Springy{
                                     throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "directory within mountpoint not allowed: " << directory;
                                 }
 
-                                this->config.directories.insert(std::make_pair(boost::filesystem::path(directory), boost::filesystem::path(virtualmountpoint)));
+                                this->config->volumes.addVolume(Springy::Util::Uri(std::string("file://")+directory), virtualmountpoint);
+                                //this->config->directories.insert(std::make_pair(boost::filesystem::path(directory), boost::filesystem::path(virtualmountpoint)));
                             }
                         }
                     }
@@ -182,7 +185,7 @@ namespace Springy{
                     //this.config.directories.insert(std::make_pair(dit->first, dit->second));
                 //}
 
-                this->config.mountpoint = mountpoint;
+                this->config->mountpoint = mountpoint;
 
                 std::vector<std::string> cmdoptions;
                 if(vm.count("option")){
@@ -192,17 +195,19 @@ namespace Springy{
                 for(unsigned int i=0;i<cmdoptions.size();i++){
                     std::vector<std::string> current;
                     boost::split( current, cmdoptions[i], boost::is_any_of(","), boost::token_compress_on );
-                    std::copy( cmdoptions.begin(), cmdoptions.end(), std::inserter( this->config.options, this->config.options.end() ) );
+                    std::copy( cmdoptions.begin(), cmdoptions.end(), std::inserter( this->config->options, this->config->options.end() ) );
                 }
 
                 if (vm.count("foreground")) {
-                    this->config.foreground = true;
+                    this->config->foreground = true;
                 }
                 else{
-                    this->config.foreground = false;
+                    this->config->foreground = false;
                 }
 
+std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
                 this->fuse.setUp(vm.count("single")!=0);
+                std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
         }catch(std::runtime_error &e){ 
           std::cerr << "ERROR: " << e.what() << std::endl << std::endl; 
           this->printHelp(std::cerr);
@@ -259,23 +264,34 @@ namespace Springy{
         */
         return *this;
     }
-    void Brain::signalHandler(boost::system::error_code error, int signal_number){
+    void Brain::sigsegv(int signal_number){
+      void *array[10];
+      size_t size;
+
+      // get void*'s for all entries on the stack
+      size = backtrace(array, 10);
+
+      // print out all the frames to stderr
+      fprintf(stderr, "Error: signal %d:\n", signal_number);
+      backtrace_symbols_fd(array, size, STDERR_FILENO);
+      exit(-1);
+    }
+    void Brain::signalHandler(boost::asio::signal_set& this_, boost::system::error_code error, int signal_number){
         switch(signal_number){
             case SIGHUP:
                 break;
             case SIGINT: case SIGTERM:
                 Brain::instance().io_service.stop();
-                break;
+                return;
         }
+        this_.async_wait(boost::bind(Brain::signalHandler, boost::ref(this_), _1, _2));
     }
     Brain& Brain::run(){
         if(this->exitStatus){
             return *this;
         }
-        
-        this->httpd.start();
 
-        if(false==this->config.foreground){
+        if(false==this->config->foreground){
             pid_t process_id = fork();
             if(process_id<0){
                 // fork failed
@@ -300,9 +316,16 @@ namespace Springy{
             close(STDERR_FILENO);
         }
 
-        signals.async_wait(Brain::signalHandler);
+        signal(SIGSEGV, Brain::sigsegv);
+        
+        this->httpd.start();
+        this->fuse.run();
 
+        signals.async_wait(boost::bind(Brain::signalHandler, boost::ref(signals), _1, _2));
+
+std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
         io_service.run();
+        std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
 
         /*
             memset (&act, '\0', sizeof(act));

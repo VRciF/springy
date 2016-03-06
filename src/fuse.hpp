@@ -62,11 +62,12 @@ namespace Springy{
             int op_link(const boost::filesystem::path from, const boost::filesystem::path to);
             int op_mknod(const boost::filesystem::path path, mode_t mode, dev_t rdev);
             int op_fsync(const boost::filesystem::path path, int isdatasync, struct fuse_file_info *fi);
-            int op_setxattr(const boost::filesystem::path file_name, const std::string attrname,
-							    const char *attrval, size_t attrvalsize, int flags);
-			int op_getxattr(const boost::filesystem::path file_name, const std::string attrname, char *buf, size_t count);
-			int op_listxattr(const boost::filesystem::path file_name, char *buf, size_t count);
-			int op_removexattr(const boost::filesystem::path file_name, const std::string attrname);
+            int op_lock(const boost::filesystem::path path, struct fuse_file_info *fi, int cmd, struct flock *lck);
+            //int op_setxattr(const boost::filesystem::path file_name, const std::string attrname,
+			//				    const char *attrval, size_t attrvalsize, int flags);
+			//int op_getxattr(const boost::filesystem::path file_name, const std::string attrname, char *buf, size_t count);
+			//int op_listxattr(const boost::filesystem::path file_name, char *buf, size_t count);
+			//int op_removexattr(const boost::filesystem::path file_name, const std::string attrname);
 
 
             static void* init(struct fuse_conn_info *conn);
@@ -94,6 +95,7 @@ namespace Springy{
             static int link(const char *from, const char *to);
             static int mknod(const char *path, mode_t mode, dev_t rdev);
             static int fsync(const char *path, int isdatasync, struct fuse_file_info *fi);
+            static int lock(const char *path, struct fuse_file_info *fi, int cmd, struct flock *lck);
             static int setxattr(const char *path, const char *attrname,
 							    const char *attrval, size_t attrvalsize, int flags);
 			static int getxattr(const char *path, const char *attrname, char *buf, size_t count);
@@ -103,6 +105,8 @@ namespace Springy{
         protected:
             Springy::Settings *config;
             Springy::LibC::ILibC *libc;
+            
+            bool readonly;
 
             bool singleThreaded;
             static const char *fsname;
@@ -116,7 +120,7 @@ namespace Springy{
             struct openFile{
                 boost::filesystem::path fuseFile;
 
-                mutable boost::filesystem::path path;
+                Springy::Volume::IVolume *volume;
 
                 int fd; // file descriptor is unique
                 int flags;
@@ -142,24 +146,21 @@ namespace Springy{
 
             struct fuse_operations fops;
             struct fuse* fuse;
-            
-            int countDirectoryElements(boost::filesystem::path p);
-            int countEquals(const boost::filesystem::path &p1, const boost::filesystem::path &p2);
-            void saveFd(boost::filesystem::path file, boost::filesystem::path usedPath, int fd, int flags);
+
+            void saveFd(boost::filesystem::path file, Springy::Volume::IVolume *volume, int fd, int flags);
             boost::filesystem::path concatPath(const boost::filesystem::path &p1, const boost::filesystem::path &p2);
-            
-            Springy::Volume::IVolume* findVolume(boost::filesystem::path file_name, struct stat *buf = NULL);
-            Springy::Volume::IVolume* getMaxFreeSpaceVolume(boost::filesystem::path path, uintmax_t *space);
+
+            Springy::Volume::IVolume* findVolume(const boost::filesystem::path file_name, struct stat *buf = NULL);
+            Springy::Volume::IVolume* getMaxFreeSpaceVolume(const boost::filesystem::path path, uintmax_t *space = NULL);
 
             boost::filesystem::path get_parent_path(const boost::filesystem::path path);
             boost::filesystem::path get_base_name(const boost::filesystem::path path);
-            int create_parent_dirs(boost::filesystem::path dir, const boost::filesystem::path path);
-            #ifndef WITHOUT_XATTR
-            int copy_xattrs(const boost::filesystem::path from, const boost::filesystem::path to);
-            #endif
+            int cloneParentDirsIntoVolume(Springy::Volume::IVolume *volume, const boost::filesystem::path path);
+            int copy_xattrs(Springy::Volume::IVolume *src, Springy::Volume::IVolume *dst, const boost::filesystem::path path);
+
             int dir_is_empty(const boost::filesystem::path path);
-            void reopen_files(const boost::filesystem::path file, const boost::filesystem::path newDirectory);
-            void move_file(int fd, boost::filesystem::path file, boost::filesystem::path directory, fsblkcnt_t wsize);
+            void reopen_files(const boost::filesystem::path file, const Springy::Volume::IVolume *volume);
+            void move_file(int fd, boost::filesystem::path file, Springy::Volume::IVolume *from, fsblkcnt_t wsize);
 
             void determineCaller(uid_t *u=NULL, gid_t *g=NULL, pid_t *p=NULL, mode_t *mask=NULL);
     };

@@ -7,6 +7,8 @@ namespace Springy{
     std::map<std::thread::id, int> Trace::traceDepth;
 
     Trace::Trace(const char *file, const char *method, int line){
+        std::cout << file << ":" << method << ":" << line << std::endl;
+
         this->referenceCounter = new int;
         *this->referenceCounter = 0;
 

@@ -50,7 +50,7 @@ namespace Springy{
             }
 
             template<typename T>
-            Exception& operator<<(T &arg){
+            Exception& operator<<(T arg){
                 if(msg.length()<=0){ this->t << "Exception="; }
                 std::ostringstream o;
                 o << arg;

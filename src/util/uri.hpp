@@ -1,11 +1,16 @@
 #ifndef SPRINGY_UTIL_URI
 #define SPRINGY_UTIL_URI
 
+#include <string>
+#include <boost/algorithm/string.hpp>
+#include <map>
+
 namespace Springy{
     namespace Util{
         class Uri{
             public:
                 Uri(std::string uri){
+                    this->uri = uri;
                     this->proto[0] = this->proto[1]
                   = this->uname[0] = this->uname[1]
                   = this->pwd[0] = this->pwd[1]
@@ -15,8 +20,9 @@ namespace Springy{
                   = this->qury[0] = this->qury[1]
                   = this->frgmnt[0] = this->frgmnt[1]
                   = 0;
-                    this->uri = uri;
+
                     this->parse();
+                    this->parseQueryString();
                 }
 
                 std::string protocol(){
@@ -49,10 +55,22 @@ namespace Springy{
                     if(len <= 0){ return std::string(); }
                     return this->uri.substr(this->pth[0], len+1);
                 }
-                std::string query(){
+                std::string query(std::multimap<std::string, std::string> *parsed = NULL){
                     std::size_t len = this->qury[1]-this->qury[0];
                     if(len <= 0){ return std::string(); }
-                    return this->uri.substr(this->qury[0], len+1);
+                    std::string q = this->uri.substr(this->qury[0], len+1);
+                    if(parsed != NULL){
+                        *parsed = this->parsedQueryString;
+                    }
+                    return q;
+                }
+                std::vector<std::string> query(std::string key){
+                    std::vector<std::string> values;
+                    std::pair <std::multimap<std::string,std::string>::iterator, std::multimap<std::string,std::string>::iterator> ret = this->parsedQueryString.equal_range(key);
+                    for (std::multimap<std::string,std::string>::iterator it=ret.first; it!=ret.second; ++it){
+                        values.push_back(it->second);
+                    }
+                    return values;
                 }
                 std::string fragment(){
                     std::size_t len = this->frgmnt[1]-this->frgmnt[0];
@@ -60,8 +78,12 @@ namespace Springy{
                     return this->uri.substr(this->frgmnt[0], len+1);
                 }
 
-                std::string string() const { return this->uri; }
-                operator std::string() const { return this->string(); }
+                std::string string() const {
+                    return this->uri;
+                }
+                operator std::string() const {
+                    return this->string();
+                }
 
             protected:
                 // the first entry is the position (index origin 0) of the first character for the given value
@@ -69,6 +91,29 @@ namespace Springy{
                 std::size_t proto[2], uname[2], pwd[2], hst[2],
                             prt[2], pth[2], qury[2], frgmnt[2];
                 std::string uri;
+                std::multimap<std::string, std::string> parsedQueryString;
+                
+                void parseQueryString(){
+                    std::size_t len = this->qury[1]-this->qury[0];
+                    if(len <= 0){ return; }
+                    std::string q = this->uri.substr(this->qury[0], len+1);
+                    std::vector<std::string> parts;
+                    boost::split(parts, q, boost::is_any_of("&"));
+                    for(std::size_t i=0;i<parts.size();i++){
+                        std::string p = parts[i];
+                        std::size_t pos = p.find_first_of("=");
+                        std::string key, value;
+                        if(pos==std::string::npos){
+                            pos = p.length();
+                            key = p;
+                        }
+                        else{
+                            key   = p.substr(0, pos);
+                            value = p.substr(pos+1);
+                        }
+                        this->parsedQueryString.insert(std::make_pair(key, value));
+                    }
+                }
 
                 // prot://uname:pwd@host:port/path?query#fragment
                 void parse(){

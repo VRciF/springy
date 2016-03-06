@@ -98,10 +98,16 @@ Httpd::~Httpd(){
 
 
 void Httpd::handle_directory(int what, struct ns_connection *nc, struct http_message *hm){
+    std::string contentType("application/json");
   char directory[8192] = {'\0'};
   char vmountpoint[8192] = {'\0'};
   char callback[256]   = {'\0'};
-  char response[8192]  = {'\0'};
+
+  std::stringstream ss;
+  
+  struct ns_str *acrh = ns_get_http_header(hm, "Access-Control-Request-Headers");
+  std::string accessControlRequestHeader;
+  if(acrh){ accessControlRequestHeader=std::string(acrh->p, acrh->len); }
 
   /* Get form variables */
   do{
@@ -111,16 +117,16 @@ void Httpd::handle_directory(int what, struct ns_connection *nc, struct http_mes
           vmountpoint[0] = '/';
       }
       else if(vmountpoint[0] != '/'){
-          snprintf(response, sizeof(response)-1, "{success: false, message: 'given vmountpoint parameter must start with a slash(/)-character', data: null}");
+          ss << "{success: false, message: \"given vmountpoint parameter must start with a slash(/)-character\", data: null}";
           break;
       }
 
       if(ns_get_http_var(&hm->query_string, "directory", directory, sizeof(directory))<=0){
-          snprintf(response, sizeof(response)-1, "{success: false, message: 'invalid (length) directory parameter given', data: null}");
+          ss << "{success: false, message: \"invalid (length) directory parameter given\", data: null}";
           break;
       }
       if(directory[0]!='/'){
-          snprintf(response, sizeof(response)-1, "{success: false, message: 'invalid directory - only absolute paths starting with / are allowed', data: null}");
+          ss << "{success: false, message: \"invalid directory - only absolute paths starting with / are allowed\", data: null}";
           break;
       }
 
@@ -129,71 +135,165 @@ void Httpd::handle_directory(int what, struct ns_connection *nc, struct http_mes
       switch(what){
           case 1:
           {
-              Synchronized sDirs(this->config->directories);
-              
-              this->config->directories.insert(std::make_pair(directory, vmountpoint));
+              try{
+                  Springy::Util::Uri dir(directory);
+                  if(dir.protocol()==""){ dir = Springy::Util::Uri(std::string("file://")+directory); }
+                  this->config->volumes.addVolume(dir, vmountpoint);
+              }catch(...){
+                  errno = EINVAL;
+              }
           }
           break;
           case 0:
           {
-              Synchronized sDirs(this->config->directories);
-              this->config->directories.erase(directory);
-              /*
-              for(std::vector<std::string>::iterator it = directories.begin();it!=directories.end();){
-                  if (boost::starts_with(*it, directory)){
-                      int idx = it - directories.begin();
-                      directories.erase(it);
-                      it = directories.begin() + idx;
-                      continue;
-                  }
-                  it++;
+              try{
+                  Springy::Util::Uri dir(directory);
+                  if(dir.protocol()==""){ dir = Springy::Util::Uri(std::string("file://")+directory); }
+                  this->config->volumes.removeVolume(dir, vmountpoint);
+              }catch(...){
+                  errno = EINVAL;
               }
-              */
           }
           break;
       }
 
       if(errno!=0){
-          snprintf(response, sizeof(response)-1, "{success: false, message: 'processing directory %s failed with %d:%s', data: null}", directory, errno, strerror(errno));
+          ss << "{success: false, message: \"processing directory " << directory << " failed with " << errno << ":" << strerror(errno) << "\", data: null}";
       }
       else{
-          snprintf(response, sizeof(response)-1, "{success: true, message: 'directory successfully processed', data: null}");
+          ss << "{success: true, message: \"directory successfully processed\", data: null}";
       }
   }while(0);
+  
+  std::string response = ss.str();
+  if(strlen(callback)>0){
+      response = std::string(callback)+"("+response+");";
+      contentType = "application/javascript";
+  }
 
   /* Send headers */
-  ns_printf(nc, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nTransfer-Encoding: chunked\r\n\r\n", strlen(response));
+  ns_printf(nc, "HTTP/1.1 200 OK\r\n");
+  ns_printf(nc, "Content-Length: %d\r\n", response.length());
+  ns_printf(nc, "Content-Type: %s\r\n", contentType.c_str());
+  ns_printf(nc, "Access-Control-Allow-Origin: *\r\n");
+  ns_printf(nc, "Access-Control-Allow-Methods: POST, GET, OPTIONS, HEAD, PUT, DELETE\r\n");
+  if(accessControlRequestHeader.length()>0){
+      ns_printf(nc, "Access-Control-Allow-Headers: %s\r\n", accessControlRequestHeader.c_str());
+  }
+  ns_printf(nc, "Access-Control-Max-Age: 1728000\r\n");
+  ns_printf(nc, "Transfer-Encoding: chunked\r\n\r\n");
 
-  if(strlen(callback)>0){
-      ns_printf_http_chunk(nc, callback);
-      ns_printf_http_chunk(nc, "(");
-      ns_printf_http_chunk(nc, response);
-      ns_printf_http_chunk(nc, ");");
-  }
-  else{
-      ns_printf_http_chunk(nc, response);
-  }
+  ns_printf_http_chunk(nc, response.c_str());
 
   ns_send_http_chunk(nc, "", 0);  /* Send empty chunk, the end of response */
+}
+void Httpd::list_directory(struct ns_connection *nc, struct http_message *hm){
+    std::string contentType("application/json");
+    char callback[256]   = {'\0'};
+
+    struct ns_str *acrh = ns_get_http_header(hm, "Access-Control-Request-Headers");
+    std::string accessControlRequestHeader;
+    if(acrh){ accessControlRequestHeader=std::string(acrh->p, acrh->len); }
+
+    /* Get form variables */
+
+    ns_get_http_var(&hm->query_string, "callback", callback, sizeof(callback));
+
+    errno = 0;
+
+    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > vols = this->config->volumes.getVolumes();
+    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> >::iterator it;
+    std::stringstream ss;
+
+    ss << "{success: false, message: \"volumes loaded\", data:";
+    ss << "[";
+    for(it=vols.begin();it!=vols.end();it++){
+        ss << "{ volume: \"" << it->first->string() << "\", virtualmountpoint: \"" << it->second.string() << "\" }";
+    }
+    ss << "]";
+    ss << "}";
+    std::string response = ss.str();
+    if(strlen(callback)>0){
+        response = std::string(callback)+"("+response+");";
+        contentType = "application/javascript";
+    }
+
+    /* Send headers */
+    ns_printf(nc, "HTTP/1.1 200 OK\r\n");
+    ns_printf(nc, "Content-Length: %d\r\n", response.length());
+    ns_printf(nc, "Content-Type: %s\r\n", contentType.c_str());
+    ns_printf(nc, "Access-Control-Allow-Origin: *\r\n");
+    ns_printf(nc, "Access-Control-Allow-Methods: POST, GET, OPTIONS, HEAD, PUT, DELETE\r\n");
+    if(accessControlRequestHeader.length()>0){
+        ns_printf(nc, "Access-Control-Allow-Headers: %s\r\n", accessControlRequestHeader.c_str());
+    }
+    ns_printf(nc, "Access-Control-Max-Age: 1728000\r\n");
+    ns_printf(nc, "Transfer-Encoding: chunked\r\n\r\n");
+
+    ns_printf_http_chunk(nc, response.c_str());
+
+    ns_send_http_chunk(nc, "", 0);  /* Send empty chunk, the end of response */
+}
+
+void Httpd::handle_invalid_request(struct ns_connection *nc, struct http_message *hm){
+    std::string contentType("application/json");
+    char callback[256]   = {'\0'};
+
+    struct ns_str *acrh = ns_get_http_header(hm, "Access-Control-Request-Headers");
+    std::string accessControlRequestHeader;
+    if(acrh){ accessControlRequestHeader=std::string(acrh->p, acrh->len); }
+
+    /* Get form variables */
+
+    ns_get_http_var(&hm->query_string, "callback", callback, sizeof(callback));
+
+    std::stringstream ss;
+
+    ss << "{success: false, message: \"unkown request\", data: null}";
+  
+    std::string response = ss.str();
+    if(strlen(callback)>0){
+        response = std::string(callback)+"("+response+");";
+        contentType = "application/javascript";
+    }
+
+    /* Send headers */
+    ns_printf(nc, "HTTP/1.1 200 OK\r\n");
+    ns_printf(nc, "Content-Length: %d\r\n", response.length());
+    ns_printf(nc, "Content-Type: %s\r\n", contentType.c_str());
+    ns_printf(nc, "Access-Control-Allow-Origin: *\r\n");
+    ns_printf(nc, "Access-Control-Allow-Methods: POST, GET, OPTIONS, HEAD, PUT, DELETE\r\n");
+    if(accessControlRequestHeader.length()>0){
+        ns_printf(nc, "Access-Control-Allow-Headers: %s\r\n", accessControlRequestHeader.c_str());
+    }
+    ns_printf(nc, "Access-Control-Max-Age: 1728000\r\n");
+    ns_printf(nc, "Transfer-Encoding: chunked\r\n\r\n");
+
+    ns_printf_http_chunk(nc, response.c_str());
+
+    ns_send_http_chunk(nc, "", 0);  /* Send empty chunk, the end of response */
 }
 
 void Httpd::ev_handler(struct ns_connection *nc, int ev, void *ev_data) {
     Httpd *instance = (Httpd*)nc->user_data;
-  struct http_message *hm = (struct http_message *) ev_data;
+    struct http_message *hm = (struct http_message *) ev_data;
 
-  switch (ev) {
-    case NS_HTTP_REQUEST:
-      if (ns_vcmp(&hm->uri, "/api/addDirectory") == 0) {
-          instance->handle_directory(1, nc, hm);
-      } else if (ns_vcmp(&hm->uri, "/api/remDirectory") == 0) {
-          instance->handle_directory(0, nc, hm);
-      } else {
-        ns_serve_http(nc, hm, instance->data.s_http_server_opts);
-      }
-      break;
-    default:
-      break;
-  }
+    switch (ev) {
+      case NS_HTTP_REQUEST:
+        if (ns_vcmp(&hm->uri, "/api/addDirectory") == 0) {
+            instance->handle_directory(1, nc, hm);
+        } else if (ns_vcmp(&hm->uri, "/api/remDirectory") == 0) {
+            instance->handle_directory(0, nc, hm);
+        } else if (ns_vcmp(&hm->uri, "/api/listDirectory") == 0) {
+            instance->list_directory(nc, hm);
+        } else {
+            instance->handle_invalid_request(nc, hm);
+          //ns_serve_http(nc, hm, instance->data.s_http_server_opts);
+        }
+        break;
+      default:
+        break;
+    }
 }
 
 /* this function is run by the second thread */
@@ -222,7 +322,6 @@ void* Httpd::server(void *arg)
     }
 */
 
-    std::cout << __FILE__ << ":" << __LINE__ << std::endl;
     while(true) {
         ns_mgr_poll(&instance->data.mgr, 500);
 
@@ -233,7 +332,6 @@ void* Httpd::server(void *arg)
             }
         }
     }
-    std::cout << __FILE__ << ":" << __LINE__ << std::endl;
 
     ns_mgr_free(&instance->data.mgr);
 

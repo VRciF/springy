@@ -36,7 +36,8 @@ namespace Springy{
             Brain& run();
             Brain& tearDown();
 
-            static void signalHandler(boost::system::error_code error, int signal_number);
+            static void sigsegv(int signal_number);
+            static void signalHandler(boost::asio::signal_set& this_, boost::system::error_code error, int signal_number);
             void printHelp(std::ostream & output);
 
         protected:
@@ -51,7 +52,7 @@ namespace Springy{
             po::options_description hiddenDesc;
 
             Springy::LibC::ILibC *libc;
-            Springy::Settings config;
+            Springy::Settings *config;
 
             Fuse fuse;
             Httpd httpd;

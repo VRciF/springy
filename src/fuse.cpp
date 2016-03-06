@@ -29,6 +29,7 @@ Fuse::Fuse(){
     this->fuse   = NULL;
     this->config = NULL;
     this->libc   = NULL;
+    this->readonly = false;
 }
 Fuse& Fuse::init(Springy::Settings *config, Springy::LibC::ILibC *libc){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
@@ -69,6 +70,8 @@ Fuse& Fuse::init(Springy::Settings *config, Springy::LibC::ILibC *libc){
     this->fops.fsync      	= Fuse::fsync;
     this->fops.link		    = Fuse::link;
 
+    this->fops.lock		    = Fuse::lock;
+
 #ifndef WITHOUT_XATTR
     this->fops.setxattr   	= Fuse::setxattr;
     this->fops.getxattr   	= Fuse::getxattr;
@@ -108,36 +111,41 @@ Fuse& Fuse::setUp(bool singleThreaded){
         fuseArgv.push_back("-s");
     }
     fuseArgv.push_back("-f");
-    
+
+    this->readonly = (this->config->options.find("ro")!=this->config->options.end());
+
     this->fuseoptions = boost::algorithm::join(this->config->options, ",");
     if(this->fuseoptions.size()>0){
         fuseArgv.push_back("-o");
         fuseArgv.push_back(this->fuseoptions.c_str());
     }
 
+std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     this->fuse = fuse_setup(fuseArgv.size(), (char**)&fuseArgv[0], &this->fops, sizeof(this->fops),
                       &this->fmountpoint, &multithreaded, static_cast<void*>(this));
-
+std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     if(this->fuse==NULL){
         // fuse failed!
         throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "initializing fuse failed";
     }
 
+std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     return *this;
 }
 Fuse& Fuse::run(){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
+std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     this->th = std::thread(Fuse::thread, this);
 
     return *this;
 }
 Fuse& Fuse::tearDown(){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
+    
     if(this->fuse && !fuse_exited(this->fuse)){
         fuse_teardown(this->fuse, this->fmountpoint);
-	    fuse_exit(this->fuse);
         this->fmountpoint = NULL;
 	}
 
@@ -157,6 +165,8 @@ Fuse& Fuse::tearDown(){
 }
 
 void Fuse::thread(Fuse *instance){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
+    
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     int res = 0;
@@ -167,11 +177,15 @@ void Fuse::thread(Fuse *instance){
 	sigfillset(&set);
 	pthread_sigmask(SIG_SETMASK, &set, NULL);
 
+std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
 	if (instance->singleThreaded){
+        std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
 		res = fuse_loop_mt(instance->fuse);
 	}else{
+        std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
 		res = fuse_loop(instance->fuse);
 	}
+std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
 
 	fuse_teardown(instance->fuse, instance->fmountpoint);
 	instance->fuse = NULL;
@@ -195,54 +209,7 @@ Fuse::~Fuse(){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 }
 
-int Fuse::countDirectoryElements(boost::filesystem::path p){
-    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-	int depth = 0;
-
-	while(p.has_relative_path()){
-        if(p.string() == "/"){ break; }
-		depth++;
-		p = p.parent_path();
-	}
-
-	return depth;
-}
-
-int Fuse::countEquals(const boost::filesystem::path &p1, const boost::filesystem::path &p2){
-    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-    int cnt = 0;
-    boost::filesystem::path::iterator it1, it2;
-    for(it1=p1.begin(), it2=p2.begin();
-        it1!=p1.end() && it2!=p2.end();
-        it1++,it2++){
-        if(*it1 == *it2){
-            if(it1->string() == "/" ||
-               it2->string() == "/"){ continue; }
-
-            cnt++;
-        }
-        else{
-            break;
-        }
-    }
-
-    return cnt;
-}
-
-boost::filesystem::path Fuse::concatPath(const boost::filesystem::path &p1, const boost::filesystem::path &p2){
-    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-    boost::filesystem::path p = boost::filesystem::path(p1/p2);
-    while(p.string().back() == '/'){
-        p = p.parent_path();
-    }
-
-    return p;
-}
-
-Springy::Volume::IVolume* Fuse::findVolume(boost::filesystem::path file_name, struct stat *buf){
+Springy::Volume::IVolume* Fuse::findVolume(const boost::filesystem::path file_name, struct stat *buf){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
 	struct stat b;
@@ -260,7 +227,7 @@ Springy::Volume::IVolume* Fuse::findVolume(boost::filesystem::path file_name, st
 
     throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "file not found";
 }
-Springy::Volume::IVolume* Fuse::getMaxFreeSpaceVolume(boost::filesystem::path path, uintmax_t *space){
+Springy::Volume::IVolume* Fuse::getMaxFreeSpaceVolume(const boost::filesystem::path path, uintmax_t *space){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > vols = this->config->volumes.getVolumesByVirtualFileName(path);
@@ -296,13 +263,7 @@ boost::filesystem::path Fuse::get_parent_path(const boost::filesystem::path p){
     return parent;
 }
 
-boost::filesystem::path Fuse::get_base_name(const boost::filesystem::path p){
-    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-    return p.filename();
-}
-
-int Fuse::create_parent_dirs(boost::filesystem::path dir, const boost::filesystem::path path){
+int Fuse::cloneParentDirsIntoVolume(Springy::Volume::IVolume *volume, const boost::filesystem::path path){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     boost::filesystem::path parent;
@@ -313,20 +274,9 @@ int Fuse::create_parent_dirs(boost::filesystem::path dir, const boost::filesyste
         return 0;
     }
 
-	boost::filesystem::path exists;
-    try{
-        exists = this->findPath(parent);
-    }
-    catch(...){
-        Trace(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-        return -EFAULT;
-    }
-
-	boost::filesystem::path path_parent = this->concatPath(dir, parent);
 	struct stat st;
-
 	// already exists
-	if (this->libc->stat(__LINE__, path_parent.c_str(), &st)==0)
+    if (volume->stat(parent, &st) == 0)
 	{
         if(!S_ISDIR(st.st_mode)){
             errno = ENOTDIR;
@@ -336,39 +286,45 @@ int Fuse::create_parent_dirs(boost::filesystem::path dir, const boost::filesyste
 		return 0;
 	}
 
+    Springy::Volume::IVolume *sourceVolume = NULL;
+    try{
+        sourceVolume = Fuse::findVolume(parent, &st);
+    }
+    catch(...){
+        Trace(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+        return -EFAULT;
+    }
+
 	// create parent dirs
-	int res = this->create_parent_dirs(dir, parent);
+	int res = this->cloneParentDirsIntoVolume(volume, parent);
 	if (res!=0)
 	{
 		return res;
 	}
 
-	// get stat from exists dir
-	if (this->libc->stat(__LINE__, exists.c_str(), &st)!=0)
-	{
-        Trace(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-		return -errno;
-	}
-	res=this->libc->mkdir(__LINE__, path_parent.c_str(), st.st_mode);
+	res = volume->mkdir(parent, st.st_mode);
 	if (res==0)
 	{
-		this->libc->chown(__LINE__, path_parent.c_str(), st.st_uid, st.st_gid);
-		this->libc->chmod(__LINE__, path_parent.c_str(), st.st_mode);
+		volume->chown(parent, st.st_uid, st.st_gid);
+		volume->chmod(parent, st.st_mode);
 #ifndef WITHOUT_XATTR
         // copy extended attributes of parent dir
-        this->copy_xattrs(exists, path_parent);
+        this->copy_xattrs(sourceVolume, volume, parent);
 #endif
 	}
 	else
 	{
-        Trace(__FILE__, __PRETTY_FUNCTION__, __LINE__) << path_parent.string();
+        //Trace(__FILE__, __PRETTY_FUNCTION__, __LINE__) << volume->string() << " : " << parent.string();
+        Trace(__FILE__, __PRETTY_FUNCTION__, __LINE__)  << (volume->string()) << " : " << parent.string();
 		res=-errno;
 	}
 
 	return res;
 }
+
+int Fuse::copy_xattrs(Springy::Volume::IVolume *src, Springy::Volume::IVolume *dst, const boost::filesystem::path path){
 #ifndef WITHOUT_XATTR
-int Fuse::copy_xattrs(const boost::filesystem::path from, const boost::filesystem::path to){
+/*
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     int listsize=0, attrvalsize=0;
@@ -376,12 +332,12 @@ int Fuse::copy_xattrs(const boost::filesystem::path from, const boost::filesyste
             *name_begin=NULL, *name_end=NULL;
 
     // if not xattrs on source, then do nothing
-    if ((listsize=this->libc->listxattr(__LINE__, from.c_str(), NULL, 0)) == 0)
+    if ((listsize = src->listxattr(path, NULL, 0)) == 0)
             return 0;
 
     // get all extended attributes
     listbuf=(char *)this->libc->calloc(__LINE__, sizeof(char), listsize);
-    if (this->libc->listxattr(__LINE__, from.c_str(), listbuf, listsize) == -1)
+    if (src->listxattr(path, listbuf, listsize) == -1)
     {
         Trace(__FILE__, __PRETTY_FUNCTION__, __LINE__);
         return -1;
@@ -396,7 +352,7 @@ int Fuse::copy_xattrs(const boost::filesystem::path from, const boost::filesyste
                 continue;
 
         // get the size of the extended attribute
-        attrvalsize = this->libc->getxattr(__LINE__, from.c_str(), name_begin, NULL, 0);
+        attrvalsize = src->getxattr(path, name_begin, NULL, 0);
         if (attrvalsize < 0)
         {
             Trace(__FILE__, __PRETTY_FUNCTION__, __LINE__);
@@ -405,14 +361,14 @@ int Fuse::copy_xattrs(const boost::filesystem::path from, const boost::filesyste
 
         // get the value of the extended attribute
         attrvalbuf=(char *)this->libc->calloc(__LINE__, sizeof(char), attrvalsize);
-        if (this->libc->getxattr(__LINE__, from.c_str(), name_begin, attrvalbuf, attrvalsize) < 0)
+        if (src->getxattr(path, name_begin, attrvalbuf, attrvalsize) < 0)
         {
             Trace(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             return -1;
         }
 
         // set the value of the extended attribute on dest file
-        if (this->libc->setxattr(__LINE__, to.c_str(), name_begin, attrvalbuf, attrvalsize, 0) < 0)
+        if (dst->setxattr(path, name_begin, attrvalbuf, attrvalsize, 0) < 0)
         {
             Trace(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             return -1;
@@ -427,9 +383,10 @@ int Fuse::copy_xattrs(const boost::filesystem::path from, const boost::filesyste
     }
 
     this->libc->free(__LINE__, listbuf);
+*/
+#endif
     return 0;
 }
-#endif
 int Fuse::dir_is_empty(const boost::filesystem::path p){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
@@ -449,9 +406,9 @@ int Fuse::dir_is_empty(const boost::filesystem::path p){
 	this->libc->closedir(__LINE__, dir);
 	return 1;
 }
-void Fuse::reopen_files(const boost::filesystem::path file, const boost::filesystem::path newDirectory){
+void Fuse::reopen_files(const boost::filesystem::path file, const Springy::Volume::IVolume *volume){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
+/*
     boost::filesystem::path newFile = this->concatPath(newDirectory, file);
     Synchronized syncOpenFiles(this->openFiles);
 
@@ -462,7 +419,7 @@ void Fuse::reopen_files(const boost::filesystem::path file, const boost::filesys
     openFiles_set::index<of_idx_fuseFile>::type::iterator it;
     for(it = range.first;it!=range.second;it++){
 
-        off_t seek = lseek(it->fd, 0, SEEK_CUR);
+        off_t seek = this->libc->lseek(it->fd, 0, SEEK_CUR);
         int flags = it->flags;
         int fh;
 
@@ -494,9 +451,10 @@ void Fuse::reopen_files(const boost::filesystem::path file, const boost::filesys
 
         range.first->path = newDirectory;
     }
+*/
 }
 
-void Fuse::saveFd(boost::filesystem::path file, boost::filesystem::path usedPath, int fd, int flags){
+void Fuse::saveFd(boost::filesystem::path file, Springy::Volume::IVolume *volume, int fd, int flags){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     Synchronized syncOpenFiles(this->openFiles);
@@ -511,14 +469,14 @@ void Fuse::saveFd(boost::filesystem::path file, boost::filesystem::path usedPath
         syncToken = new int;
     }
 
-    struct openFile of = { file, usedPath/file, fd, flags, syncToken, true};
+    struct openFile of = { file, volume, fd, flags, syncToken, true};
     this->openFiles.insert(of);
 }
 
-void Fuse::move_file(int fd, boost::filesystem::path file, boost::filesystem::path from, fsblkcnt_t wsize)
+void Fuse::move_file(int fd, boost::filesystem::path file, Springy::Volume::IVolume *from, fsblkcnt_t wsize)
 {
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
+/*
 	char *buf = NULL;
 	ssize_t size;
 	FILE *input = NULL, *output = NULL;
@@ -526,21 +484,21 @@ void Fuse::move_file(int fd, boost::filesystem::path file, boost::filesystem::pa
 	fsblkcnt_t space;
 	struct stat st;
 
-    boost::filesystem::path maxSpaceDir = this->getMaxFreeSpaceDir(file, &space);
-    if(space<wsize || from.parent_path() == maxSpaceDir){
+    Springy::Volume::IVolume *to = this->getMaxFreeSpaceVolume(file, &space);
+    if(space<wsize || from == to){
         throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "not enough space";
     }
 
-	/* get file size */
+	// get file size
 	if (this->libc->fstat(__LINE__, fd, &st) != 0) {
         throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "fstat failed";
 	}
 
 
-    /* Hard link support is limited to a single device, and files with
-       >1 hardlinks cannot be moved between devices since this would
-       (a) result in partial files on the source device (b) not free
-       the space from the source device during unlink. */
+    // Hard link support is limited to a single device, and files with
+    // >1 hardlinks cannot be moved between devices since this would
+    // (a) result in partial files on the source device (b) not free
+    // the space from the source device during unlink.
 	if (st.st_nlink > 1) {
         throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "cannot move file with hard links";
 	}
@@ -548,7 +506,7 @@ void Fuse::move_file(int fd, boost::filesystem::path file, boost::filesystem::pa
     this->create_parent_dirs(maxSpaceDir, file);
 
     //boost::filesystem::path from = this->concatPath(directory, file);
-    boost::filesystem::path to = this->concatPath(maxSpaceDir, file);
+    //boost::filesystem::path to = this->concatPath(maxSpaceDir, file);
 
     // in case fd is not open for reading - just open a new file pointer
 	if (!(input = this->libc->fopen(__LINE__, from.c_str(), "r"))){
@@ -621,7 +579,7 @@ void Fuse::move_file(int fd, boost::filesystem::path file, boost::filesystem::pa
 
 #ifndef WITHOUT_XATTR
         // extended attributes
-        this->copy_xattrs(from, to);
+        this->copy_xattrs(from, to, file);
 #endif
 
     try{
@@ -644,6 +602,7 @@ void Fuse::move_file(int fd, boost::filesystem::path file, boost::filesystem::pa
         this->libc->unlink(__LINE__, to.c_str());
         throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "failed to reopen already open files";
     }
+*/
 }
 
 void* Fuse::op_init(struct fuse_conn_info *conn){
@@ -663,7 +622,7 @@ int Fuse::op_getattr(const boost::filesystem::path file_name, struct stat *buf){
     if(buf==NULL){ return -EINVAL; }
 
 	try{
-		this->findPath(file_name, buf);
+		this->findVolume(file_name, buf);
 		return 0;
 	}
 	catch(...){
@@ -678,37 +637,39 @@ int Fuse::op_statfs(const boost::filesystem::path path, struct statvfs *buf){
 
     if(buf==NULL){ return -EINVAL; }
 
-	std::map<dev_t, struct statvfs> stats;
-	std::map<dev_t, struct statvfs>::iterator it;
+    std::vector<struct statvfs> stats;
+    std::set<dev_t> localDevices;
 
     try{
-		this->findPath(path);
+		this->findVolume(path);
 	}
 	catch(...){
         t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
         return -ENOENT;
     }
 
-    std::map<boost::filesystem::path, boost::filesystem::path> directories = this->findRelevantPaths(path);
-
     unsigned long min_block = 0, min_frame = 0;
 
-    std::map<boost::filesystem::path, boost::filesystem::path>::iterator dit;
-	for(dit=directories.begin();dit != directories.end();dit++){
-		struct stat st;
-		int ret = stat(dit->first.c_str(), &st);
-		if (ret != 0) {
-			return -errno;
-		}
-		if(stats.find(st.st_dev)!=stats.end()){ continue; }
+    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > vols = this->config->volumes.getVolumesByVirtualFileName(path);
+    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> >::iterator it;
+    for(it=vols.begin();it != vols.end();it++){
+        if(it->first->isLocal()){
 
-		struct statvfs stv;
-		ret = this->libc->statvfs(__LINE__, dit->first.c_str(), &stv);
-		if (ret != 0) {
-			return -errno;
-		}
+            struct stat st;
+            int ret = it->first->stat(path, &st);
+            if (ret != 0) {
+                return -errno;
+            }
+            if(localDevices.find(st.st_dev) == localDevices.end()){ continue; }
+        }
 
-		stats[st.st_dev] = stv;
+        struct statvfs stv;
+        int ret = it->first->statvfs(path, &stv);
+        if (ret != 0) {
+            return -errno;
+        }
+
+        stats.push_back(stv);
 
 		if(stats.size()==1){
 			min_block = stv.f_bsize,
@@ -725,31 +686,31 @@ int Fuse::op_statfs(const boost::filesystem::path path, struct statvfs *buf){
 	if (!min_frame)
 		min_frame = 512;
 
-    for (it = stats.begin(); it != stats.end(); it++) {
-		if (it->second.f_bsize>min_block) {
-			it->second.f_bfree    *=  it->second.f_bsize/min_block;
-			it->second.f_bavail   *=  it->second.f_bsize/min_block;
-			it->second.f_bsize    =   min_block;
+    for (unsigned int i=0;i < stats.size();i++) {
+		if (stats[i].f_bsize>min_block) {
+			stats[i].f_bfree    *=  stats[i].f_bsize/min_block;
+			stats[i].f_bavail   *=  stats[i].f_bsize/min_block;
+			stats[i].f_bsize    =   min_block;
 		}
-		if (it->second.f_frsize>min_frame) {
-			it->second.f_blocks   *=  it->second.f_frsize/min_frame;
-			it->second.f_frsize   =   min_frame;
+		if (stats[i].f_frsize>min_frame) {
+			stats[i].f_blocks   *=  stats[i].f_frsize/min_frame;
+			stats[i].f_frsize   =   min_frame;
 		}
 
-		if(it==stats.begin()){
-			memcpy(buf, &it->second, sizeof(struct statvfs));
+		if(i == 0){
+			memcpy(buf, &stats[i], sizeof(struct statvfs));
 			continue;
 		}
 
-		if (buf->f_namemax<it->second.f_namemax) {
-			buf->f_namemax = it->second.f_namemax;
+		if (buf->f_namemax < stats[i].f_namemax) {
+			buf->f_namemax = stats[i].f_namemax;
 		}
-		buf->f_ffree  +=  it->second.f_ffree;
-		buf->f_files  +=  it->second.f_files;
-		buf->f_favail +=  it->second.f_favail;
-		buf->f_bavail +=  it->second.f_bavail;
-		buf->f_bfree  +=  it->second.f_bfree;
-		buf->f_blocks +=  it->second.f_blocks;
+		buf->f_ffree  +=  stats[i].f_ffree;
+		buf->f_files  +=  stats[i].f_files;
+		buf->f_favail +=  stats[i].f_favail;
+		buf->f_bavail +=  stats[i].f_bavail;
+		buf->f_bfree  +=  stats[i].f_bfree;
+		buf->f_blocks +=  stats[i].f_blocks;
 	}
 
 	return 0;
@@ -765,22 +726,19 @@ int Fuse::op_readdir(
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     std::unordered_map<std::string, struct stat> dir_item_ht;
-    std::unordered_map<std::string, struct stat>::iterator it;
+    std::unordered_map<std::string, struct stat>::iterator dit;
     struct stat st;
 	size_t found=0;
-    std::vector<boost::filesystem::path> dirs;
+    std::vector<Springy::Volume::IVolume*> dirs;
 
-	std::map<boost::filesystem::path, boost::filesystem::path> directories = this->findRelevantPaths(dirname);
-
-	// find all dirs
-    std::map<boost::filesystem::path, boost::filesystem::path>::iterator dit;
-	for(dit=directories.begin();dit != directories.end();dit++){
-
-		boost::filesystem::path path = this->concatPath(dit->first, dirname);
-		if (this->libc->stat(__LINE__, path.c_str(), &st) == 0) {
+    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > vols = this->config->volumes.getVolumesByVirtualFileName(dirname);
+    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> >::iterator it;
+    for(it=vols.begin();it != vols.end();it++){
+        // check if the volume actually has the given dirname
+		if (it->first->stat(dirname, &st) == 0) {
 			found++;
 			if (S_ISDIR(st.st_mode)) {
-                dirs.push_back(path);
+                dirs.push_back(it->first);
 				continue;
 			}
 		}
@@ -796,30 +754,11 @@ int Fuse::op_readdir(
 
 	// read directories
 	for (size_t i = 0; i<dirs.size(); i++) {
-		struct dirent *de;
-		DIR * dh = this->libc->opendir(__LINE__, dirs[i].c_str());
-		if (!dh){
-			continue;
-        }
-
-		while((de = this->libc->readdir(__LINE__, dh))) {
-			// find dups
-            if(dir_item_ht.find(de->d_name)!=dir_item_ht.end()){
-                continue;
-            }
-
-			// add item
-            boost::filesystem::path object_name = this->concatPath(dirs[i], de->d_name);
-
-            this->libc->lstat(__LINE__, object_name.c_str(), &st);
-            dir_item_ht.insert(std::make_pair(de->d_name, st));
-		}
-
-		this->libc->closedir(__LINE__, dh);
+        dirs[i]->readdir(dirname, dir_item_ht);
 	}
 
-    for(it=dir_item_ht.begin();it!=dir_item_ht.end();it++){
-        if (filler(buf, it->first.c_str(), &it->second, 0))
+    for(dit=dir_item_ht.begin();dit!=dir_item_ht.end();dit++){
+        if (filler(buf, dit->first.c_str(), &dit->second, 0))
                 break;
     }
 
@@ -833,9 +772,9 @@ int Fuse::op_readlink(const boost::filesystem::path path, char *buf, size_t size
 
     int res = 0;
     try{
-        boost::filesystem::path link = this->findPath(path);
+        Springy::Volume::IVolume *vol = this->findVolume(path);
         memset(buf, 0, size);
-        res = this->libc->readlink(__LINE__, link.c_str(), buf, size);
+        res = vol->readlink(path, buf, size);
 
         if (res >= 0)
             return 0;
@@ -849,15 +788,17 @@ int Fuse::op_readlink(const boost::filesystem::path path, char *buf, size_t size
 
 int Fuse::op_create(const boost::filesystem::path file, mode_t mode, struct fuse_file_info *fi){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+    
+    if(this->readonly){ return -EROFS; }
 
     try{
-        this->findPath(file);
+        this->findVolume(file);
         // file exists
     }
     catch(...){
-        boost::filesystem::path maxFreeDir;
+        Springy::Volume::IVolume *maxFreeVolume = NULL;
         try{
-             maxFreeDir = this->getMaxFreeSpaceDir(file);
+             maxFreeVolume = this->getMaxFreeSpaceVolume(file);
         }
         catch(...){
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
@@ -865,22 +806,21 @@ int Fuse::op_create(const boost::filesystem::path file, mode_t mode, struct fuse
             return -ENOSPC;
         }
 
-        this->create_parent_dirs(maxFreeDir, file);
-        boost::filesystem::path path = this->concatPath(maxFreeDir, file);
+        this->cloneParentDirsIntoVolume(maxFreeVolume, file);
 
         // file doesnt exist
-        int fd = this->libc->creat(__LINE__, path.c_str(), mode);
+        int fd = maxFreeVolume->creat(file, mode);
         if(fd == -1){
             return -errno;
         }
         try{
-            this->saveFd(file, maxFreeDir, fd, O_CREAT|O_WRONLY|O_TRUNC);
+            this->saveFd(file, maxFreeVolume, fd, O_CREAT|O_WRONLY|O_TRUNC);
             fi->fh = fd;
         }
         catch(...){
             if(errno==0){ errno = ENOMEM; }
             int rval = errno;
-            this->libc->close(__LINE__, fd);
+            maxFreeVolume->close(file, fd);
 
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
@@ -894,25 +834,26 @@ int Fuse::op_create(const boost::filesystem::path file, mode_t mode, struct fuse
 
 int Fuse::op_open(const boost::filesystem::path file, struct fuse_file_info *fi){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+    
+    if(this->readonly && (fi->flags&O_RDONLY) != O_RDONLY){ return -EROFS; }
 
     fi->fh = 0;
 
     try{
         int fd = 0;
-        boost::filesystem::path usedPath;
-	    boost::filesystem::path path = this->findPath(file, NULL, &usedPath);
-		fd = this->libc->open(__LINE__, path.c_str(), fi->flags);
+        Springy::Volume::IVolume *volume = this->findVolume(file);
+        fd = volume->open(file, fi->flags);
 		if (fd == -1) {
 			return -errno;
 		}
 
         try{
-            this->saveFd(file, usedPath, fd, fi->flags);
+            this->saveFd(file, volume, fd, fi->flags);
         }
         catch(...){
             if(errno==0){ errno = ENOMEM; }
             int rval = errno;
-            this->libc->close(__LINE__, fd);
+            volume->close(file, fd);
 
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
@@ -927,20 +868,19 @@ int Fuse::op_open(const boost::filesystem::path file, struct fuse_file_info *fi)
         t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
     }
 
-    boost::filesystem::path maxFreeDir;
+    Springy::Volume::IVolume *maxFreeVolume = NULL;
     try{
-         maxFreeDir = this->getMaxFreeSpaceDir(file);
+         maxFreeVolume = this->getMaxFreeSpaceVolume(file);
     }
     catch(...){
         t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
         return -ENOSPC;
     }
 
-	this->create_parent_dirs(maxFreeDir, file);
-	boost::filesystem::path path = this->concatPath(maxFreeDir, file);
+	this->cloneParentDirsIntoVolume(maxFreeVolume, file);
 
     int fd = -1;
-	fd = this->libc->open(__LINE__, path.c_str(), fi->flags);
+	fd = maxFreeVolume->open(file, fi->flags);
 
 	if (fd == -1) {
 		return -errno;
@@ -951,11 +891,11 @@ int Fuse::op_open(const boost::filesystem::path file, struct fuse_file_info *fi)
         gid_t gid;
         uid_t uid;
         this->determineCaller(&uid, &gid);
-		if (fstat(fd, &st) == 0) {
+		if (maxFreeVolume->fstat(file, fd, &st) == 0) {
 			// parent directory is SGID'ed
 			if (st.st_gid != getgid()) gid = st.st_gid;
 		}
-		fchown(fd, uid, gid);
+		maxFreeVolume->fchown(file, fd, uid, gid);
 	}
 
     try{
@@ -963,7 +903,7 @@ int Fuse::op_open(const boost::filesystem::path file, struct fuse_file_info *fi)
 
         int *syncToken = NULL;
         openFiles_set::index<of_idx_fuseFile>::type &idx = this->openFiles.get<of_idx_fuseFile>();
-        openFiles_set::index<of_idx_fuseFile>::type::iterator it = idx.find(path);
+        openFiles_set::index<of_idx_fuseFile>::type::iterator it = idx.find(file);
         if(it!=idx.end()){
             syncToken = it->syncToken;
         }
@@ -971,13 +911,13 @@ int Fuse::op_open(const boost::filesystem::path file, struct fuse_file_info *fi)
             syncToken = new int;
         }
 
-        struct openFile of = { file, maxFreeDir, fd, fi->flags, syncToken, true};
+        struct openFile of = { file, maxFreeVolume, fd, fi->flags, syncToken, true };
         this->openFiles.insert(of);
     }
     catch(...){
         if(errno==0){ errno = ENOMEM; }
         int rval = errno;
-        this->libc->close(__LINE__, fd);
+        maxFreeVolume->close(file, fd);
 
         t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
@@ -996,13 +936,15 @@ int Fuse::op_release(const boost::filesystem::path path, struct fuse_file_info *
 
     try{
         Synchronized syncOpenFiles(this->openFiles);
-        this->libc->close(__LINE__, fd);
 
         openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
         openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
         if(it==idx.end()){
             throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "bad descriptor";
         }
+
+        it->volume->close(path, fd);
+
         int *syncToken = it->syncToken;
         boost::filesystem::path fuseFile = it->fuseFile;
         idx.erase(it);
@@ -1022,7 +964,7 @@ int Fuse::op_release(const boost::filesystem::path path, struct fuse_file_info *
 	return 0;
 }
 
-int Fuse::op_read(const boost::filesystem::path, char *buf, size_t count, off_t offset, struct fuse_file_info *fi)
+int Fuse::op_read(const boost::filesystem::path file, char *buf, size_t count, off_t offset, struct fuse_file_info *fi)
 {
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
@@ -1039,23 +981,28 @@ int Fuse::op_read(const boost::filesystem::path, char *buf, size_t count, off_t 
             errno = EINVAL;
             return -errno;
         }
+
+        Springy::Volume::IVolume *volume = it->volume;
+        ssize_t res;
+        res = volume->pread(file, fd, buf, count, offset);
+        if (res == -1){
+            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+            return -errno;
+        }
+
+        return res;
     }catch(...){
         t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+        errno = EBADFD;
+        return -errno;
     }
-
-	ssize_t res;
-	res = this->libc->pread(__LINE__, fd, buf, count, offset);
-
-	if (res == -1){
-        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-		return -errno;
-    }
-	return res;
 }
 
 int Fuse::op_write(const boost::filesystem::path file, const char *buf, size_t count, off_t offset, struct fuse_file_info *fi)
 {
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+    
+    if(this->readonly){ return -EROFS; }
 
     if(buf==NULL){ return -EINVAL; }
 
@@ -1063,7 +1010,7 @@ int Fuse::op_write(const boost::filesystem::path file, const char *buf, size_t c
     int fd = fi->fh;
 
     int *syncToken = NULL;
-    boost::filesystem::path path;
+    Springy::Volume::IVolume *volume;
 
     try{
         Synchronized syncOpenFiles(this->openFiles);
@@ -1082,7 +1029,7 @@ int Fuse::op_write(const boost::filesystem::path file, const char *buf, size_t c
         }
 
         syncToken = it->syncToken;
-        path = it->path;
+        volume = it->volume;
     }catch(...){
         if(errno==0){ errno = EBADFD; }
         t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__, "exception catched");
@@ -1107,7 +1054,7 @@ int Fuse::op_write(const boost::filesystem::path file, const char *buf, size_t c
     // write failed, cause of no space left
     errno = ENOSPC;
     try{
-        this->move_file(fd, file, path, (off_t)(offset+count) > st.st_size ? offset+count : st.st_size);
+        this->move_file(fd, file, volume, (off_t)(offset+count) > st.st_size ? offset+count : st.st_size);
     }catch(...){
         t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__, "exception catched");
         return -errno;
@@ -1124,10 +1071,12 @@ int Fuse::op_write(const boost::filesystem::path file, const char *buf, size_t c
 
 int Fuse::op_truncate(const boost::filesystem::path path, off_t size){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+    
+    if(this->readonly){ return -EROFS; }
 
     try{
-        boost::filesystem::path file = this->findPath(path);
-        int res = this->libc->truncate(__LINE__, file.c_str(), size);
+        Springy::Volume::IVolume *vol = this->findVolume(path);
+        int res = vol->truncate(path, size);
 
 		if (res == -1){
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
@@ -1142,6 +1091,8 @@ int Fuse::op_truncate(const boost::filesystem::path path, off_t size){
 }
 int Fuse::op_ftruncate(const boost::filesystem::path path, off_t size, struct fuse_file_info *fi){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+    
+    if(this->readonly){ return -EROFS; }
 
     int fd = fi->fh;
     try{
@@ -1154,21 +1105,26 @@ int Fuse::op_ftruncate(const boost::filesystem::path path, off_t size, struct fu
             errno = EINVAL;
             return -errno;
         }
+        if(it->volume->ftruncate(path, fd, size) == -1){
+            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+		    return -errno;
+        }
+        return 0;
     }catch(...){}
 
-	if (this->libc->ftruncate(__LINE__, fd, size) == -1){
-        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-		return -errno;
-    }
-	return 0;
+    errno = -EBADFD;
+    t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+    return -errno;
 }
 
-int Fuse::op_access(const boost::filesystem::path path, int mask){
+int Fuse::op_access(const boost::filesystem::path path, int mode){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+    
+    if(this->readonly && (mode&F_OK) != F_OK && (mode&R_OK) != R_OK){ return -EROFS; }
 
     try{
-        boost::filesystem::path file = this->findPath(path);
-        int res = this->libc->access(__LINE__, file.c_str(), mask);
+        Springy::Volume::IVolume *vol = this->findVolume(path);
+        int res = vol->access(path, mode);
 
 		if (res == -1){
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
@@ -1184,27 +1140,29 @@ int Fuse::op_access(const boost::filesystem::path path, int mask){
 
 int Fuse::op_mkdir(const boost::filesystem::path path, mode_t mode){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+    
+    if(this->readonly){ return -EROFS; }
 
+    Springy::Volume::IVolume *vol = NULL;
     try{
-        this->findPath(path);
+        vol = this->findVolume(path);
+
         errno = EEXIST;
         return -errno;
     }catch(...){}
 
-	boost::filesystem::path parent;
     try{
-        parent = this->get_parent_path(path);
-        this->findPath(parent);
+        boost::filesystem::path parent = this->get_parent_path(path);
+        this->findVolume(parent);
     }
     catch(...){
-        errno = EFAULT;
+        errno = ENOENT;
         t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
         return -errno;
     }
 
-    boost::filesystem::path dir;
     try{
-        dir = this->getMaxFreeSpaceDir(path);
+        vol = this->getMaxFreeSpaceVolume(path);
     }
     catch(...){
 		errno = ENOSPC;
@@ -1212,20 +1170,19 @@ int Fuse::op_mkdir(const boost::filesystem::path path, mode_t mode){
 		return -errno;
     }
 
-    this->create_parent_dirs(dir, path);
-	boost::filesystem::path name = this->concatPath(dir, path);
-	if (this->libc->mkdir(__LINE__, name.c_str(), mode) == 0) {
-		if (getuid() == 0) {
+    this->cloneParentDirsIntoVolume(vol, path);
+	if (vol->mkdir(path, mode) == 0) {
+		if (this->libc->getuid(__LINE__) == 0) {
 			struct stat st;
             gid_t gid;
             uid_t uid;
             this->determineCaller(&uid, &gid);
-			if (this->libc->lstat(__LINE__, name.c_str(), &st) == 0) {
+			if (vol->lstat(path, &st) == 0) {
 				// parent directory is SGID'ed
-				if (st.st_gid != getgid())
+				if (st.st_gid != this->libc->getgid(__LINE__))
 					gid = st.st_gid;
 			}
-			this->libc->chown(__LINE__, name.c_str(), uid, gid);
+			vol->chown(path, uid, gid);
 		}
 		return 0;
 	}
@@ -1235,13 +1192,12 @@ int Fuse::op_mkdir(const boost::filesystem::path path, mode_t mode){
 }
 int Fuse::op_rmdir(const boost::filesystem::path path){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-    boost::filesystem::path dir;
-    int res = 0;
+    
+    if(this->readonly){ return -EROFS; }
 
     try{
-        dir = this->findPath(path);
-        res = this->libc->rmdir(__LINE__, dir.c_str());
+        Springy::Volume::IVolume *vol = this->findVolume(path);
+        int res = vol->rmdir(path);
         if (res == -1){
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             return -errno;
@@ -1256,32 +1212,33 @@ int Fuse::op_rmdir(const boost::filesystem::path path){
 
 int Fuse::op_unlink(const boost::filesystem::path path){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-    int res = 0;
+    
+    if(this->readonly){ return -EROFS; }
 
     try{
-	    boost::filesystem::path file = this->findPath(path);
-        res = this->libc->unlink(__LINE__, file.c_str());
+        Springy::Volume::IVolume *vol = this->findVolume(path);
+        int res = vol->unlink(path);
+
+        if (res == -1){
+            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+            return -errno;
+        }
+
+        return 0;
     }catch(...){
         t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 		errno = ENOENT;
 		return -errno;
     }
-
-	if (res == -1){
-        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-        return -errno;
-    }
-	return 0;
 }
 
 int Fuse::op_rename(const boost::filesystem::path from, const boost::filesystem::path to){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+    
+    if(this->readonly){ return -EROFS; }
 
     int res;
-	struct stat sto, sfrom;
-	int from_is_dir = 0, to_is_dir = 0, from_is_file = 0, to_is_file = 0;
-	int to_dir_is_empty = 1;
+    struct stat st;
 
 	if (from == to)
 		return 0;
@@ -1289,123 +1246,45 @@ int Fuse::op_rename(const boost::filesystem::path from, const boost::filesystem:
     boost::filesystem::path fromParent = this->get_parent_path(from);
     boost::filesystem::path toParent = this->get_parent_path(to);
 
-	Synchronized sDirs(this->config->directories, Synchronized::LockType::READ);
+    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > fromVolumes = this->config->volumes.getVolumesByVirtualFileName(from);
+    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> >::iterator it;
 
-	// seek for possible errors
-    std::map<boost::filesystem::path, boost::filesystem::path>::iterator dit;
-	for(dit=this->config->directories.begin();dit != this->config->directories.end();dit++){
-        // if virtual mountpoint
-        if(dit->second.string().find(fromParent.string())!=0 || dit->second.string().find(toParent.string())!=0){ continue; }
+    for(it=fromVolumes.begin();it!=fromVolumes.end();it++){
+        if(it->first->stat(from, &st)!=0){ continue; }
 
-		boost::filesystem::path obj_to   = this->concatPath(dit->first, to);
-		boost::filesystem::path obj_from = this->concatPath(dit->first, from);
-		if (this->libc->stat(__LINE__, obj_to.c_str(), &sto) == 0) {
-			if (S_ISDIR(sto.st_mode)) {
-				to_is_dir++;
-				if (!this->dir_is_empty(obj_to))
-					to_dir_is_empty = 0;
-			}
-			else
-				to_is_file++;
-		}
-		if (this->libc->stat(__LINE__, obj_from.c_str(), &sfrom) == 0) {
-			if (S_ISDIR (sfrom.st_mode))
-				from_is_dir++;
-			else
-				from_is_file++;
-		}
-
-        errno = 0;
-		if (to_is_file && from_is_dir){
-            errno = ENOTDIR;
-        }
-		else if (to_is_file && to_is_dir){
-            errno = ENOTEMPTY;
-        }
-		else if (from_is_dir && !to_dir_is_empty){
-            errno = ENOTEMPTY;
-        }
-        if(errno != 0){
+        res = it->first->rename(from, to);
+        if (res == -1) {
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-			return -errno;
+            return -errno;
         }
-	}
-
-	// parent 'to' path doesn't exists
-	boost::filesystem::path pto = this->get_parent_path(to);
-    try{
-        this->findPath(pto);
     }
-    catch(...){
-        errno = ENOENT;
-        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-        return -errno;
-    }
-
-	// rename cycle
-	for(dit=this->config->directories.begin();dit != this->config->directories.end();dit++){
-        if(dit->second.string().find(fromParent.string())!=0 || dit->second.string().find(toParent.string())!=0){ continue; }
-
-		boost::filesystem::path obj_to   = this->concatPath(dit->first, to);
-		boost::filesystem::path obj_from = this->concatPath(dit->first, from);
-
-		if (this->libc->stat(__LINE__, obj_from.c_str(), &sfrom) == 0) {
-			// if from is dir and at the same time file, we only rename dir
-			if (from_is_dir && from_is_file) {
-				if (!S_ISDIR(sfrom.st_mode)) {
-					continue;
-				}
-			}
-
-			this->create_parent_dirs(dit->first, to);
-
-			res = this->libc->rename(__LINE__, obj_from.c_str(), obj_to.c_str());
-			if (res == -1) {
-                t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-				return -errno;
-			}
-		} else {
-			// from and to are files, so we must remove to files
-			if (from_is_file && to_is_file && !from_is_dir) {
-				if (this->libc->stat(__LINE__, obj_to.c_str(), &sto) == 0) {
-					if (this->libc->unlink(__LINE__, obj_to.c_str()) == -1) {
-                        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-						return -errno;
-					}
-				}
-			}
-		}
-
-	}
 
 	return 0;
 }
 
 int Fuse::op_utimens(const boost::filesystem::path path, const struct timespec ts[2]){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+    
+    if(this->readonly){ return -EROFS; }
 
-	size_t flag_found;
+	size_t flag_found = 0;
     int res;
     struct stat st;
 
-	Synchronized sDirs(this->config->directories, Synchronized::LockType::READ);
+    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > pathVolumes = this->config->volumes.getVolumesByVirtualFileName(path);
+    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> >::iterator it;
 
-    Springy::Settings::DirectoryMap::const_iterator dit = this->config->directories.begin();
-	for(flag_found=0;dit != this->config->directories.end();dit++){
-		boost::filesystem::path object = this->concatPath(dit->first, path);
-		if (this->libc->lstat(__LINE__, object.c_str(), &st) != 0) {
-			continue;
-		}
+    for(it=pathVolumes.begin();it!=pathVolumes.end();it++){
+        if(it->first->stat(path, &st)!=0){ continue; }
+        
+        flag_found = 1;
 
-		flag_found = 1;
-
-        res = this->libc->utimensat(__LINE__, AT_FDCWD, object.c_str(), ts, AT_SYMLINK_NOFOLLOW);
-
-		if (res == -1){
+        res = it->first->utimensat(path, ts);
+        if (res == -1) {
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-			return -errno;
+            return -errno;
         }
-	}
+    }
 	if (flag_found)
 		return 0;
 	errno = ENOENT;
@@ -1415,28 +1294,27 @@ int Fuse::op_utimens(const boost::filesystem::path path, const struct timespec t
 
 int Fuse::op_chmod(const boost::filesystem::path path, mode_t mode){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+    
+    if(this->readonly){ return -EROFS; }
 
 	size_t flag_found;
     int res;
     struct stat st;
+    
+    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > pathVolumes = this->config->volumes.getVolumesByVirtualFileName(path);
+    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> >::iterator it;
 
-	Synchronized sDirs(this->config->directories, Synchronized::LockType::READ);
+    for(it=pathVolumes.begin();it!=pathVolumes.end();it++){
+        if(it->first->stat(path, &st)!=0){ continue; }
 
-    Springy::Settings::DirectoryMap::const_iterator dit = this->config->directories.begin();
-	for(flag_found=0;dit != this->config->directories.end();dit++){
-		boost::filesystem::path object = this->concatPath(dit->first, path);
-		if (this->libc->lstat(__LINE__, object.c_str(), &st) != 0) {
-			continue;
-		}
-
-		flag_found = 1;
-		res = this->libc->chmod(__LINE__, object.c_str(), mode);
+        flag_found = 1;
+        res = it->first->chmod(path, mode);
 
 		if (res == -1){
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 			return -errno;
         }
-	}
+    }
 	if (flag_found)
 		return 0;
 	errno = ENOENT;
@@ -1446,27 +1324,27 @@ int Fuse::op_chmod(const boost::filesystem::path path, mode_t mode){
 
 int Fuse::op_chown(const boost::filesystem::path path, uid_t uid, gid_t gid){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+    
+    if(this->readonly){ return -EROFS; }
 
 	size_t flag_found;
     int res;
     struct stat st;
 
-	Synchronized sDirs(this->config->directories, Synchronized::LockType::READ);
+    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > pathVolumes = this->config->volumes.getVolumesByVirtualFileName(path);
+    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> >::iterator it;
 
-    Springy::Settings::DirectoryMap::const_iterator dit = this->config->directories.begin();
-	for(flag_found=0;dit != this->config->directories.end();dit++){
-		boost::filesystem::path object = this->concatPath(dit->first, path);
-		if (this->libc->lstat(__LINE__, object.c_str(), &st) != 0) {
-			continue;
-		}
+    for(it=pathVolumes.begin();it!=pathVolumes.end();it++){
+        if(it->first->stat(path, &st)!=0){ continue; }
 
-		flag_found = 1;
-		res = this->libc->lchown(__LINE__, object.c_str(), uid, gid);
+        flag_found = 1;
+        res = it->first->chown(path, uid, gid);
+
 		if (res == -1){
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 			return -errno;
         }
-	}
+    }
 	if (flag_found)
 		return 0;
 	errno = ENOENT;
@@ -1476,13 +1354,16 @@ int Fuse::op_chown(const boost::filesystem::path path, uid_t uid, gid_t gid){
 
 int Fuse::op_symlink(const boost::filesystem::path oldname, const boost::filesystem::path newname){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+    
+    if(this->readonly){ return -EROFS; }
 
 	int i, res;
 
-    boost::filesystem::path parent, directory;
+    Springy::Volume::IVolume *volume;
+    boost::filesystem::path parent;
     try{
         parent = this->get_parent_path(newname);
-        directory = this->findPath(parent);
+        volume = this->findVolume(parent);
     }catch(...){
         errno = ENOENT;
         t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
@@ -1492,19 +1373,18 @@ int Fuse::op_symlink(const boost::filesystem::path oldname, const boost::filesys
 	for (i = 0; i < 2; i++) {
 		if (i) {
             try{
-			    directory = this->getMaxFreeSpaceDir(parent);
+			    volume = this->getMaxFreeSpaceVolume(parent);
             }catch(...){
 				errno = ENOSPC;
                 t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 				return -errno;
 			}
 
-			this->create_parent_dirs(directory, newname);
+			this->cloneParentDirsIntoVolume(volume, newname);
 		}
 
-		boost::filesystem::path path_to = this->concatPath(directory, newname);
 
-		res = this->libc->symlink(__LINE__, oldname.c_str(), path_to.c_str());
+		res = volume->symlink(oldname, newname);
 
 		if (res == 0)
 			return 0;
@@ -1519,29 +1399,27 @@ int Fuse::op_symlink(const boost::filesystem::path oldname, const boost::filesys
 
 int Fuse::op_link(const boost::filesystem::path oldname, const boost::filesystem::path newname){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+    
+    if(this->readonly){ return -EROFS; }
 
     int res = 0;
-    boost::filesystem::path usedPath;
+    Springy::Volume::IVolume *volume;
 
     try{
-        this->findPath(oldname, NULL, &usedPath);
+        volume = this->findVolume(oldname);
     }catch(...){
 		errno = ENOENT;
         t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 		return -errno;
     }
 
-	res = this->create_parent_dirs(usedPath, newname);
+	res = this->cloneParentDirsIntoVolume(volume, newname);
 	if (res != 0) {
         t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 		return res;
 	}
-    
 
-	boost::filesystem::path path_oldname = this->concatPath(usedPath, oldname);
-	boost::filesystem::path path_newname = this->concatPath(usedPath, newname);
-
-	res = this->libc->link(__LINE__, path_oldname.c_str(), path_newname.c_str());
+	res = volume->link(oldname, newname);
 
 	if (res == 0)
 		return 0;
@@ -1551,12 +1429,15 @@ int Fuse::op_link(const boost::filesystem::path oldname, const boost::filesystem
 
 int Fuse::op_mknod(const boost::filesystem::path path, mode_t mode, dev_t rdev){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+    
+    if(this->readonly){ return -EROFS; }
 
 	int res, i;
-    boost::filesystem::path parent, directory;
+    boost::filesystem::path parent;
+    Springy::Volume::IVolume *volume;
     try{
         parent = this->get_parent_path(path);
-        directory = this->findPath(parent);
+        volume = this->findVolume(parent);
     }catch(...){
         errno = ENOENT;
         t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
@@ -1566,32 +1447,31 @@ int Fuse::op_mknod(const boost::filesystem::path path, mode_t mode, dev_t rdev){
 	for (i = 0; i < 2; i++) {
 		if (i) {
             try{
-                directory = this->getMaxFreeSpaceDir(parent);
+                volume = this->getMaxFreeSpaceVolume(parent);
             }catch(...){
 				errno = ENOSPC;
                 t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 				return -errno;
             }
 
-			this->create_parent_dirs(directory, path);
+			this->cloneParentDirsIntoVolume(volume, path);
 		}
-		boost::filesystem::path nod = this->concatPath(directory, path);
 
 		if (S_ISREG(mode)) {
-			res = this->libc->open(__LINE__, nod.c_str(), O_CREAT | O_EXCL | O_WRONLY, mode);
+			res = volume->open(path, O_CREAT | O_EXCL | O_WRONLY, mode);
 			if (res >= 0)
-				res = close(res);
+				res = volume->close(path, res);
 		} else if (S_ISFIFO(mode))
-			res = this->libc->mkfifo(__LINE__, nod.c_str(), mode);
+			res = volume->mkfifo(path, mode);
 		else
-			res = this->libc->mknod(__LINE__, nod.c_str(), mode, rdev);
+			res = volume->mknod(path, mode, rdev);
 
 		if (res != -1) {
 			if (this->libc->getuid(__LINE__) == 0) {
                 uid_t uid;
                 gid_t gid;
                 this->determineCaller(&uid, &gid);
-				this->libc->chown(__LINE__, nod.c_str(), uid, gid);
+				volume->chown(path, uid, gid);
 			}
 
 			return 0;
@@ -1614,6 +1494,8 @@ int Fuse::op_mknod(const boost::filesystem::path path, mode_t mode, dev_t rdev){
 
 int Fuse::op_fsync(const boost::filesystem::path path, int isdatasync, struct fuse_file_info *fi){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+    
+    if(this->readonly){ return -EROFS; }
 
     int fd = fi->fh;
     try{
@@ -1626,94 +1508,126 @@ int Fuse::op_fsync(const boost::filesystem::path path, int isdatasync, struct fu
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             return -errno;
         }
-    }catch(...){}
 
-    int res = 0;
+        int res = 0;
 
 #ifdef HAVE_FDATASYNC
-	if (isdatasync)
-		res = this->libc->fdatasync(__LINE__, fd);
-	else
+        if (isdatasync)
+            res = it->volume->fdatasync(path, fd);
+        else
 #endif
-		res = this->libc->fsync(__LINE__, fd);
+            res = it->volume->fsync(path, fd);
 
-	if (res == -1)
-		return -errno;
+        if (res == -1)
+            return -errno;
+    }catch(...){
+        errno = EBADFD;
+        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+        return -errno;
+    }
+
 	return 0;
 }
 
-#ifndef WITHOUT_XATTR
-int Fuse::op_setxattr(const boost::filesystem::path file_name, const std::string attrname,
-                const char *attrval, size_t attrvalsize, int flags){
+int Fuse::op_lock(const boost::filesystem::path path, struct fuse_file_info *fi, int cmd, struct flock *lck){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-	try{
-		boost::filesystem::path path = this->findPath(file_name);
-        if (this->libc->setxattr(__LINE__, path.c_str(), attrname.c_str(), attrval, attrvalsize, flags) == -1){
-            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-            return -errno;
-         }
-		return 0;
-	}
-	catch(...){
-        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-    }
-	return -ENOENT;
-}
-
-int Fuse::op_getxattr(const boost::filesystem::path file_name, const std::string attrname, char *buf, size_t count){
-    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-	try{
-		boost::filesystem::path path = this->findPath(file_name);
-        int size = this->libc->getxattr(__LINE__, path.c_str(), attrname.c_str(), buf, count);
-        if(size == -1){
-            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-            return -errno;
-        }
-		return size;
-	}
-	catch(...){
-        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-    }
-	return -ENOENT;
-}
-
-int Fuse::op_listxattr(const boost::filesystem::path file_name, char *buf, size_t count){
-    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
+    int fd = fi->fh;
     try{
-		boost::filesystem::path path = this->findPath(file_name);
-		int ret = 0;
-        if((ret=this->libc->listxattr(__LINE__, path.c_str(), buf, count)) == -1){
+        Synchronized syncOpenFiles(this->openFiles);
+
+        openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
+        openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
+        if(it!=idx.end() && it->valid==false){
+            errno = EINVAL;
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             return -errno;
         }
-		return ret;
-	}
-	catch(...){
-        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-    }
-	return -ENOENT;
-}
 
-int Fuse::op_removexattr(const boost::filesystem::path file_name, const std::string attrname){
-    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-	try{
-		boost::filesystem::path path = this->findPath(file_name);
-        if(this->libc->removexattr(__LINE__, path.c_str(), attrname.c_str()) == -1){
-            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+        int res = it->volume->lock(path, fd, cmd, lck, &fi->lock_owner);
+        if (res == -1)
             return -errno;
-        }
-		return 0;
-	}
-	catch(...){
+    }catch(...){
+        errno = EBADFD;
         t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+        return -errno;
     }
-	return -ENOENT;
+
+	return 0;
 }
-#endif
+
+//#ifndef WITHOUT_XATTR
+//int Fuse::op_setxattr(const boost::filesystem::path file_name, const std::string attrname,
+//                const char *attrval, size_t attrvalsize, int flags){
+//    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+//
+//	try{
+//		boost::filesystem::path path = this->findVolume(file_name);
+//        if (this->libc->setxattr(__LINE__, path.c_str(), attrname.c_str(), attrval, attrvalsize, flags) == -1){
+//            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+//            return -errno;
+//         }
+//		return 0;
+//	}
+//	catch(...){
+//        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+//    }
+//	return -ENOENT;
+//}
+
+//int Fuse::op_getxattr(const boost::filesystem::path file_name, const std::string attrname, char *buf, size_t count){
+//    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+//
+//	try{
+//		boost::filesystem::path path = this->findPath(file_name);
+//        int size = this->libc->getxattr(__LINE__, path.c_str(), attrname.c_str(), buf, count);
+//        if(size == -1){
+//            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+//            return -errno;
+//        }
+//		return size;
+//	}
+//	catch(...){
+//        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+//    }
+//	return -ENOENT;
+//}
+
+//int Fuse::op_listxattr(const boost::filesystem::path file_name, char *buf, size_t count){
+//    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+//
+//    try{
+//		boost::filesystem::path path = this->findPath(file_name);
+//		int ret = 0;
+//        if((ret=this->libc->listxattr(__LINE__, path.c_str(), buf, count)) == -1){
+//            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+//            return -errno;
+//        }
+//		return ret;
+//	}
+//	catch(...){
+//        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+//    }
+//	return -ENOENT;
+//}
+
+//int Fuse::op_removexattr(const boost::filesystem::path file_name, const std::string attrname){
+//    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+//
+//	try{
+//		boost::filesystem::path path = this->findPath(file_name);
+//        if(this->libc->removexattr(__LINE__, path.c_str(), attrname.c_str()) == -1){
+//            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+//            return -errno;
+//        }
+//		return 0;
+//	}
+//	catch(...){
+//        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+//    }
+//	return -ENOENT;
+//}
+//#endif
 
 
 
@@ -1721,21 +1635,24 @@ int Fuse::op_removexattr(const boost::filesystem::path file_name, const std::str
 ////// static functions to forward function call to Fuse* instance
 
 void* Fuse::init(struct fuse_conn_info *conn){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->init(conn);
+    return instance->op_init(conn);
 }
 void Fuse::destroy(void *arg){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
     Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->destroy(arg);
+    return instance->op_destroy(arg);
 }
 
 int Fuse::getattr(const char *path, struct stat *buf){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
@@ -1743,6 +1660,7 @@ int Fuse::getattr(const char *path, struct stat *buf){
     return instance->op_getattr(boost::filesystem::path(path), buf);
 }
 int Fuse::statfs(const char *path, struct statvfs *buf){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
@@ -1752,6 +1670,7 @@ int Fuse::statfs(const char *path, struct statvfs *buf){
 
 int Fuse::readdir(const char *dirname, void *buf, fuse_fill_dir_t filler,
                   off_t offset, struct fuse_file_info * fi){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
@@ -1759,6 +1678,7 @@ int Fuse::readdir(const char *dirname, void *buf, fuse_fill_dir_t filler,
     return instance->op_readdir(boost::filesystem::path(dirname), buf, filler, offset, fi);
 }
 int Fuse::readlink(const char *path, char *buf, size_t size){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
@@ -1767,6 +1687,7 @@ int Fuse::readlink(const char *path, char *buf, size_t size){
 }
 
 int Fuse::create(const char *path, mode_t mode, struct fuse_file_info *fi){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
@@ -1774,6 +1695,7 @@ int Fuse::create(const char *path, mode_t mode, struct fuse_file_info *fi){
     return instance->op_create(boost::filesystem::path(path), mode, fi);
 }
 int Fuse::open(const char *path, struct fuse_file_info *fi){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
@@ -1781,6 +1703,7 @@ int Fuse::open(const char *path, struct fuse_file_info *fi){
     return instance->op_open(boost::filesystem::path(path), fi);
 }
 int Fuse::release(const char *path, struct fuse_file_info *fi){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
@@ -1788,6 +1711,7 @@ int Fuse::release(const char *path, struct fuse_file_info *fi){
     return instance->op_open(boost::filesystem::path(path), fi);
 }
 int Fuse::read(const char *path, char *buf, size_t count, off_t offset, struct fuse_file_info *fi){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
@@ -1795,6 +1719,7 @@ int Fuse::read(const char *path, char *buf, size_t count, off_t offset, struct f
     return instance->op_read(path, buf, count, offset, fi);
 }
 int Fuse::write(const char *path, const char *buf, size_t count, off_t offset, struct fuse_file_info *fi){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
@@ -1802,6 +1727,7 @@ int Fuse::write(const char *path, const char *buf, size_t count, off_t offset, s
     return instance->op_write(boost::filesystem::path(path), buf, count, offset, fi);
 }
 int Fuse::truncate(const char *path, off_t size){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
@@ -1809,6 +1735,7 @@ int Fuse::truncate(const char *path, off_t size){
     return instance->op_truncate(boost::filesystem::path(path), size);
 }
 int Fuse::ftruncate(const char *path, off_t size, struct fuse_file_info *fi){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
@@ -1816,6 +1743,7 @@ int Fuse::ftruncate(const char *path, off_t size, struct fuse_file_info *fi){
     return instance->op_ftruncate(boost::filesystem::path(path), size, fi);
 }
 int Fuse::access(const char *path, int mask){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
@@ -1823,6 +1751,7 @@ int Fuse::access(const char *path, int mask){
     return instance->op_access(boost::filesystem::path(path), mask);
 }
 int Fuse::mkdir(const char *path, mode_t mode){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
@@ -1830,6 +1759,7 @@ int Fuse::mkdir(const char *path, mode_t mode){
     return instance->op_mkdir(boost::filesystem::path(path), mode);
 }
 int Fuse::rmdir(const char *path){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
@@ -1837,6 +1767,7 @@ int Fuse::rmdir(const char *path){
     return instance->op_rmdir(path);
 }
 int Fuse::unlink(const char *path){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
@@ -1844,6 +1775,7 @@ int Fuse::unlink(const char *path){
     return instance->op_unlink(path);
 }
 int Fuse::rename(const char *from, const char *to){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
@@ -1851,6 +1783,7 @@ int Fuse::rename(const char *from, const char *to){
     return instance->op_rename(boost::filesystem::path(from), boost::filesystem::path(to));
 }
 int Fuse::utimens(const char *path, const struct timespec ts[2]){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
@@ -1858,6 +1791,7 @@ int Fuse::utimens(const char *path, const struct timespec ts[2]){
     return instance->op_utimens(boost::filesystem::path(path), ts);
 }
 int Fuse::chmod(const char *path, mode_t mode){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
@@ -1865,6 +1799,7 @@ int Fuse::chmod(const char *path, mode_t mode){
     return instance->op_chmod(boost::filesystem::path(path), mode);
 }
 int Fuse::chown(const char *path, uid_t uid, gid_t gid){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
@@ -1872,6 +1807,7 @@ int Fuse::chown(const char *path, uid_t uid, gid_t gid){
     return instance->op_chown(boost::filesystem::path(path), uid, gid);
 }
 int Fuse::symlink(const char *from, const char *to){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
@@ -1879,6 +1815,7 @@ int Fuse::symlink(const char *from, const char *to){
     return instance->op_symlink(boost::filesystem::path(from), boost::filesystem::path(to));
 }
 int Fuse::link(const char *from, const char *to){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
@@ -1886,6 +1823,7 @@ int Fuse::link(const char *from, const char *to){
     return instance->op_link(boost::filesystem::path(from), boost::filesystem::path(to));
 }
 int Fuse::mknod(const char *path, mode_t mode, dev_t rdev){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
@@ -1893,6 +1831,7 @@ int Fuse::mknod(const char *path, mode_t mode, dev_t rdev){
     return instance->op_mknod(boost::filesystem::path(path), mode, rdev);
 }
 int Fuse::fsync(const char *path, int isdatasync, struct fuse_file_info *fi){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
     struct fuse_context *ctx = fuse_get_context();
@@ -1900,34 +1839,51 @@ int Fuse::fsync(const char *path, int isdatasync, struct fuse_file_info *fi){
     return instance->op_fsync(boost::filesystem::path(path), isdatasync, fi);
 }
 
+int Fuse::lock(const char *path, struct fuse_file_info *fi, int cmd, struct flock *lck){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
+    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+    struct fuse_context *ctx = fuse_get_context();
+    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    return instance->op_lock(boost::filesystem::path(path), fi, cmd, lck);
+}
+
 int Fuse::setxattr(const char *path, const char *attrname,
 					const char *attrval, size_t attrvalsize, int flags){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-    struct fuse_context *ctx = fuse_get_context();
-    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_setxattr(boost::filesystem::path(path), attrname, attrval, attrvalsize, flags);
+    //struct fuse_context *ctx = fuse_get_context();
+    //Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    //return instance->op_setxattr(boost::filesystem::path(path), attrname, attrval, attrvalsize, flags);
+    return -ENOTSUP;
 }
 int Fuse::getxattr(const char *path, const char *attrname, char *buf, size_t count){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-    struct fuse_context *ctx = fuse_get_context();
-    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_getxattr(boost::filesystem::path(path), attrname, buf, count);
+    //struct fuse_context *ctx = fuse_get_context();
+    //Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    //return instance->op_getxattr(boost::filesystem::path(path), attrname, buf, count);
+    return -ENOTSUP;
 }
 int Fuse::listxattr(const char *path, char *buf, size_t count){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-    struct fuse_context *ctx = fuse_get_context();
-    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_listxattr(boost::filesystem::path(path), buf, count);
+    //struct fuse_context *ctx = fuse_get_context();
+    //Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    //return instance->op_listxattr(boost::filesystem::path(path), buf, count);
+    return -ENOTSUP;
 }
 int Fuse::removexattr(const char *path, const char *attrname){
+    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-	struct fuse_context *ctx = fuse_get_context();
-    Fuse *instance = static_cast<Fuse*>(ctx->private_data);
-    return instance->op_removexattr(boost::filesystem::path(path), attrname);
+	//struct fuse_context *ctx = fuse_get_context();
+    //Fuse *instance = static_cast<Fuse*>(ctx->private_data);
+    //return instance->op_removexattr(boost::filesystem::path(path), attrname);
+    return -ENOTSUP;
 }
 
 

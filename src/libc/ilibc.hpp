@@ -31,7 +31,12 @@ namespace Springy{
                 virtual int stat(int LINE, const char *path, struct ::stat *buf) = 0;
                 virtual int fstat(int LINE, int fd, struct ::stat *buf) = 0;
                 virtual int lstat(int LINE, const char *path, struct ::stat *buf) = 0;
-                
+
+                virtual uid_t getuid(int LINE) = 0;
+                virtual uid_t geteuid(int LINE) = 0;
+                virtual gid_t getgid(int LINE) = 0;
+                virtual gid_t getegid(int LINE) = 0;
+
                 virtual int chmod(int LINE, const char *path, mode_t mode) = 0;
                 virtual int fchmod(int LINE, int fd, mode_t mode) = 0;
 
@@ -105,11 +110,6 @@ namespace Springy{
                 virtual int fdatasync(int LINE, int fd) = 0;
                 virtual int mknod(int LINE, const char *pathname, mode_t mode, dev_t dev) = 0;
                 virtual int symlink(int LINE, const char *oldpath, const char *newpath) = 0;
-
-                virtual uid_t getuid(int LINE) = 0;
-                virtual uid_t geteuid(int LINE) = 0;
-                virtual gid_t getgid(int LINE) = 0;
-                virtual gid_t getegid(int LINE) = 0;
 
                 virtual int utime(int LINE, const char *filename, const struct ::utimbuf *times) = 0;
                 virtual int utimes(int LINE, const char *filename, const struct timeval times[2]) = 0;

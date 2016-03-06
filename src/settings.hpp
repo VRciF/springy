@@ -15,7 +15,7 @@
 namespace Springy{
     class Settings{
         public:
-            Settings();
+            Settings(Springy::LibC::ILibC *libc);
 
             // first entry is the absolute path on the local file system, second entry the virtual mountpoint for the fuse file system
             //typedef std::map<boost::filesystem::path, boost::filesystem::path> DirectoryMap;

@@ -25,6 +25,9 @@ namespace Springy{
 
         public:
             void handle_directory(int what, struct ns_connection *nc, struct http_message *hm);
+            void list_directory(struct ns_connection *nc, struct http_message *hm);
+            void handle_invalid_request(struct ns_connection *nc, struct http_message *hm);
+
             static void ev_handler(struct ns_connection *nc, int ev, void *ev_data);
             static void* server(void *arg);
 

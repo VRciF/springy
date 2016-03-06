@@ -38,6 +38,11 @@ namespace Springy{
                 virtual int stat(int LINE, const char *path, struct ::stat *buf){ Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__); return ::stat(path, buf); }
                 virtual int fstat(int LINE, int fd, struct ::stat *buf){ Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__); return ::fstat(fd, buf); }
                 virtual int lstat(int LINE, const char *path, struct ::stat *buf){ Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__); return ::lstat(path, buf); }
+                
+                virtual uid_t getuid(int LINE){ Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__); return ::getuid(); }
+                virtual uid_t geteuid(int LINE){ Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__); return ::geteuid(); }
+                virtual gid_t getgid(int LINE){ Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__); return ::getgid(); }
+                virtual gid_t getegid(int LINE){ Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__); return ::getegid(); }
 
                 virtual int chmod(int LINE, const char *path, mode_t mode){ Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__); return ::chmod(path, mode); }
                 virtual int fchmod(int LINE, int fd, mode_t mode){ Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__); return ::fchmod(fd, mode); }
@@ -112,11 +117,6 @@ namespace Springy{
                 virtual int fdatasync(int LINE, int fd){ Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__); return ::fdatasync(fd); }
                 virtual int mknod(int LINE, const char *pathname, mode_t mode, dev_t dev){ Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__); return ::mknod(pathname, mode, dev); }
                 virtual int symlink(int LINE, const char *oldpath, const char *newpath){ Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__); return ::symlink(oldpath, newpath); }
-
-                virtual uid_t getuid(int LINE){ Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__); return ::getuid(); }
-                virtual uid_t geteuid(int LINE){ Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__); return ::geteuid(); }
-                virtual gid_t getgid(int LINE){ Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__); return ::getgid(); }
-                virtual gid_t getegid(int LINE){ Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__); return ::getegid(); }
 
                 virtual int utime(int LINE, const char *filename, const struct ::utimbuf *times){ Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__); return ::utime(filename, times); }
                 virtual int utimes(int LINE, const char *filename, const struct timeval times[2]){ Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__); return ::utimes(filename, times); }
