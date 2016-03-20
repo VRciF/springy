@@ -5,7 +5,9 @@
 #include "volume/ivolume.hpp"
 #include "libc/ilibc.hpp"
 
+#include <map>
 #include <set>
+#include <boost/property_tree/ptree.hpp>
 
 namespace Springy{
     class Volumes{
@@ -14,15 +16,23 @@ namespace Springy{
                 boost::filesystem::path virtualMountPoint;
                 Springy::Volume::IVolume *volume;
             };
-            typedef std::vector<VolumeConfig> VolumesVector;
 
-            VolumesVector volumes_vec;
+            boost::property_tree::ptree volumesTree;
             Springy::LibC::ILibC *libc;
-
-            int countEquals(const boost::filesystem::path &p1, const boost::filesystem::path &p2);
-            int countDirectoryElements(boost::filesystem::path p);
+            
+            std::vector<Springy::Volumes::VolumeConfig>* getTreePropertyByPath(boost::filesystem::path p);
+            void putTreePropertyByPath(boost::filesystem::path p, std::vector<Springy::Volumes::VolumeConfig> *vols);
 
         public:
+            struct VolumeRelativeFile{
+                boost::filesystem::path virtualMountPoint;
+                boost::filesystem::path volumeRelativeFileName;
+                std::set<Springy::Volume::IVolume*> volumes;
+            };
+            typedef struct VolumeRelativeFile VolumeRelativeFile;
+
+            typedef std::map<boost::filesystem::path, std::vector<Springy::Volume::IVolume*> > VolumesMap;
+            VolumesMap volumes;
 
             Volumes(Springy::LibC::ILibC *libc);
             ~Volumes();
@@ -30,8 +40,10 @@ namespace Springy{
             void addVolume(Springy::Util::Uri u, boost::filesystem::path virtualMountPoint=boost::filesystem::path("/"));
             void removeVolume(Springy::Util::Uri u, boost::filesystem::path virtualMountPoint=boost::filesystem::path("/"));
 
-            std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > getVolumesByVirtualFileName(const boost::filesystem::path file_name);
-            std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > getVolumes();
+            Springy::Volumes::VolumeRelativeFile getVolumesByVirtualFileName(const boost::filesystem::path file_name);
+            Springy::Volumes::VolumesMap getVolumes();
+
+            boost::filesystem::path convertFuseFilenameToVolumeRelativeFilename(Springy::Volume::IVolume *volume, const boost::filesystem::path fuseFileName);
     };
 }
 

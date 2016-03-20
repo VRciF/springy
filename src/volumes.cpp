@@ -4,58 +4,58 @@
 
 #include "volume/file.hpp"
 
+#include <cstdint>
+
 namespace Springy{
 
 Volumes::Volumes(Springy::LibC::ILibC *libc){ this->libc = libc; }
 Volumes::~Volumes(){}
 
-int Volumes::countEquals(const boost::filesystem::path &p1, const boost::filesystem::path &p2){
-    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+std::vector<Springy::Volumes::VolumeConfig>* Volumes::getTreePropertyByPath(boost::filesystem::path p){
+    std::vector<Springy::Volumes::VolumeConfig> *vols = NULL;
 
-    int cnt = 0;
-    boost::filesystem::path::iterator it1, it2;
-    for(it1=p1.begin(), it2=p2.begin();
-        it1!=p1.end() && it2!=p2.end();
-        it1++,it2++){
-        if(*it1 == *it2){
-            if(it1->string() == "/" ||
-               it2->string() == "/"){ continue; }
-
-            cnt++;
-        }
-        else{
-            break;
-        }
+    std::string treePath = p.string();
+    std::uintptr_t ui;
+    if(treePath == "/"){
+        ui = this->volumesTree.get_value(0);
     }
-
-    return cnt;
+    else{
+        ui = this->volumesTree.get(boost::property_tree::ptree::path_type(treePath, '/'), 0);
+    }
+    if(ui != 0){
+        vols = reinterpret_cast<std::vector<Springy::Volumes::VolumeConfig> *>(ui);
+    }
+    return vols;
 }
-int Volumes::countDirectoryElements(boost::filesystem::path p){
-    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+void Volumes::putTreePropertyByPath(boost::filesystem::path p, std::vector<Springy::Volumes::VolumeConfig> *vols){
+    std::string treePath = p.string();
 
-	int depth = 0;
-
-	while(p.has_relative_path()){
-        if(p.string() == "/"){ break; }
-		depth++;
-		p = p.parent_path();
-	}
-
-	return depth;
+    std::uintptr_t ui = reinterpret_cast<std::uintptr_t>(vols);
+    if(treePath == "/"){
+        this->volumesTree.put_value(ui);
+    }
+    else{
+        this->volumesTree.put(boost::property_tree::ptree::path_type(treePath, '/'), ui);
+    }
 }
 
 void Volumes::addVolume(Springy::Util::Uri u, boost::filesystem::path virtualMountPoint){
     std::string protocol = u.protocol();
-    if(protocol != "file"){
+    if(protocol != "file" && protocol != "springy"){
         throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__, "unkown uri protocol") << u.protocol();
     }
 
-    Synchronized syncToken(this->volumes_vec);
+    Synchronized syncToken(this->volumes);
 
     std::string stru = u.string();
-    VolumesVector::iterator it;
-    for(it=this->volumes_vec.begin();it != this->volumes_vec.end();it++){
-        if(it->virtualMountPoint == virtualMountPoint && it->volume->string() == stru){
+
+    VolumesMap::iterator it = this->volumes.find(virtualMountPoint);
+    if(it==this->volumes.end()){
+        this->volumes[virtualMountPoint];
+        it = this->volumes.find(virtualMountPoint);
+    }
+    for(size_t i=0;i<it->second.size();i++){
+        if(it->second[i]->string() == stru){
             // already added - so silently ignore to add again
             return;
         }
@@ -65,79 +65,131 @@ void Volumes::addVolume(Springy::Util::Uri u, boost::filesystem::path virtualMou
     if(protocol == "file"){
         volume = new Springy::Volume::File(this->libc, u);
     }
+    //else if(protocol == "springy"){
+    //    volume = new Springy::Volume::Springy(this->libc, u);
+    //}
+
+    it->second.push_back(volume);
 
     VolumeConfig vcfg = {virtualMountPoint, volume};
 
-    this->volumes_vec.push_back(vcfg);
+    std::vector<VolumeConfig> *vols = this->getTreePropertyByPath(virtualMountPoint);
+    if(vols==NULL){
+        vols = new std::vector<VolumeConfig>();
+    }
+    vols->push_back(vcfg);
+    this->putTreePropertyByPath(virtualMountPoint, vols);
 }
 void Volumes::removeVolume(Springy::Util::Uri u, boost::filesystem::path virtualMountPoint){
-    Synchronized syncToken(this->volumes_vec);
+    Synchronized syncToken(this->volumes);
 
-    std::string stru = u.string();
-    VolumesVector::iterator it;
-    for(it=this->volumes_vec.begin();it != this->volumes_vec.end();it++){
-        if(it->virtualMountPoint == virtualMountPoint && it->volume->string() == stru){
-            delete it->volume;
-            this->volumes_vec.erase(it);
+    std::string volMount = u.string();
+
+    VolumesMap::iterator it = this->volumes.find(virtualMountPoint);
+    if(it==this->volumes.end()){
+        return;
+    }
+    std::vector<Springy::Volume::IVolume*>::iterator vit;
+    for(vit=it->second.begin();vit!=it->second.end();vit++){
+        // find matching remote URI
+        if((*vit)->string() == volMount){
+            // remove entry from treepath
+            std::vector<VolumeConfig> *vols = this->getTreePropertyByPath(virtualMountPoint);
+            std::vector<VolumeConfig>::iterator vinner;
+            if(vols!=NULL){
+                for(vinner=vols->begin();vinner!=vols->end();vinner++){
+                    if(vinner->volume->string() == volMount){
+                        vols->erase(vinner);
+                        break;
+                    }
+                }
+                if(vols->size()<=0){
+                    delete vols;
+                    vols = NULL;
+                }
+
+                this->putTreePropertyByPath(virtualMountPoint, vols);
+            }
+            
+            // delete IVolume*
+            delete *vit;
+            // and erase regarding entry
+            it->second.erase(vit);
+
             break;
         }
     }
-
-    return;
+    if(it->second.size()<=0){
+        this->volumes.erase(it);
+    }
 }
 
-std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > Volumes::getVolumesByVirtualFileName(const boost::filesystem::path file_name){
+Springy::Volumes::VolumeRelativeFile Volumes::getVolumesByVirtualFileName(const boost::filesystem::path file_name){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-	Synchronized syncToken(this->volumes_vec, Synchronized::LockType::READ);
+	Synchronized syncToken(this->volumes, Synchronized::LockType::READ);
 
-    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > result;
+    Springy::Volumes::VolumeRelativeFile result;
 
-    int virtualEqualCnt = 0;
-    VolumesVector::iterator it;
-    for(it=this->volumes_vec.begin();it != this->volumes_vec.end();it++){
-        int dirParts = this->countDirectoryElements(it->virtualMountPoint);
-        if(dirParts<=0){ continue; } // ignore '/' root mapping
-
-        int equals = this->countEquals(it->virtualMountPoint, file_name);
-
-        if(equals == dirParts){
-            if(virtualEqualCnt>equals){
-                continue;
+    std::vector<VolumeConfig> *vols = this->getTreePropertyByPath(boost::filesystem::path());
+    if(vols!=NULL){
+        for(size_t i=0;i<vols->size();i++){
+            if(result.virtualMountPoint.empty()){
+                result.virtualMountPoint = (*vols)[i].virtualMountPoint;
             }
-
-            if(virtualEqualCnt<equals){
-                result.clear();
-            }
-
-            result.insert(std::make_pair(it->volume, it->virtualMountPoint));
-            virtualEqualCnt = equals;
+            result.volumeRelativeFileName = file_name;
+            result.volumes.insert((*vols)[i].volume);
         }
     }
 
-    if(result.size()<=0){
-        for(it=this->volumes_vec.begin();it != this->volumes_vec.end();it++){
-            int dirParts = this->countDirectoryElements(it->virtualMountPoint);
-            if(dirParts>0){ continue; } // ignore non '/' root mapping
+    boost::filesystem::path virtualMountPoint;
+    boost::filesystem::path::const_iterator pit;
+    for(pit=file_name.begin();pit!=file_name.end();pit++){
+        boost::filesystem::path tmp = virtualMountPoint;
 
-            result.insert(std::make_pair(it->volume, it->virtualMountPoint));
+        tmp /= *pit;
+
+        std::vector<VolumeConfig> *tvols = NULL;
+        tvols = this->getTreePropertyByPath(tmp);
+        if(tvols != NULL && tvols->size() > 0){
+            result = Springy::Volumes::VolumeRelativeFile();
+            for(size_t i=0;i<tvols->size();i++){
+                if(result.virtualMountPoint.empty()){
+                    result.virtualMountPoint = (*tvols)[i].virtualMountPoint;
+                }
+                boost::filesystem::path::const_iterator pit2;
+                for(pit2=pit;pit2!=file_name.end();pit2++){
+                    result.volumeRelativeFileName /= *pit2;
+                }
+                result.volumes.insert((*tvols)[i].volume);
+            }
         }
+    }
+    
+    if(result.volumes.size() <= 0){
+        throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "no matching volumes found";
     }
 
     return result;
 }
 
-std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > Volumes::getVolumes(){
+Springy::Volumes::VolumesMap Volumes::getVolumes(){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-	Synchronized syncToken(this->volumes_vec, Synchronized::LockType::READ);
+	Synchronized syncToken(this->volumes, Synchronized::LockType::READ);
+    
+    return this->volumes;
+}
 
-    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > result;
-    VolumesVector::iterator it;
-    for(it=this->volumes_vec.begin();it != this->volumes_vec.end();it++){
-        result.insert(std::make_pair(it->volume, it->virtualMountPoint));
+boost::filesystem::path Springy::Volumes::convertFuseFilenameToVolumeRelativeFilename(Springy::Volume::IVolume *volume, const boost::filesystem::path fuseFileName){
+    Springy::Volumes::VolumeRelativeFile rel = Volumes::getVolumesByVirtualFileName(fuseFileName);
+    std::set<Springy::Volume::IVolume*>::iterator it;
+    for(it=rel.volumes.begin();it!=rel.volumes.end();it++){
+        if(*it == volume){
+            return rel.volumeRelativeFileName;
+        }
     }
-    return result;
+    throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "no matching volume found";
 }
 
 }

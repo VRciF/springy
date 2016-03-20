@@ -115,10 +115,10 @@ namespace Springy{
             std::string fuseoptions;
             std::thread th;
 
-            struct of_idx_fuseFile{};
+            struct of_idx_volumeFile{};
             struct of_idx_fd{};
             struct openFile{
-                boost::filesystem::path fuseFile;
+                boost::filesystem::path volumeFile;
 
                 Springy::Volume::IVolume *volume;
 
@@ -138,7 +138,7 @@ namespace Springy{
                 boost::multi_index::ordered_unique<boost::multi_index::tag<of_idx_fd>, boost::multi_index::member<openFile,int,&openFile::fd> >,
                 
                 // sort by less<string> on name
-                boost::multi_index::ordered_non_unique<boost::multi_index::tag<of_idx_fuseFile>,boost::multi_index::member<openFile,boost::filesystem::path,&openFile::fuseFile> >
+                boost::multi_index::ordered_non_unique<boost::multi_index::tag<of_idx_volumeFile>,boost::multi_index::member<openFile,boost::filesystem::path,&openFile::volumeFile> >
               > 
             > openFiles_set;
 
@@ -147,14 +147,23 @@ namespace Springy{
             struct fuse_operations fops;
             struct fuse* fuse;
 
+            struct VolumeInfo{
+                boost::filesystem::path virtualMountPoint;
+                boost::filesystem::path volumeRelativeFileName;
+                Springy::Volume::IVolume* volume;
+                struct stat st;
+                struct statvfs stvfs;
+            };
+
             void saveFd(boost::filesystem::path file, Springy::Volume::IVolume *volume, int fd, int flags);
             boost::filesystem::path concatPath(const boost::filesystem::path &p1, const boost::filesystem::path &p2);
 
-            Springy::Volume::IVolume* findVolume(const boost::filesystem::path file_name, struct stat *buf = NULL);
-            Springy::Volume::IVolume* getMaxFreeSpaceVolume(const boost::filesystem::path path, uintmax_t *space = NULL);
+            VolumeInfo findVolume(const boost::filesystem::path file_name);
+            VolumeInfo getMaxFreeSpaceVolume(const boost::filesystem::path path);
 
             boost::filesystem::path get_parent_path(const boost::filesystem::path path);
             boost::filesystem::path get_base_name(const boost::filesystem::path path);
+            boost::filesystem::path get_remaining(const boost::filesystem::path p, const boost::filesystem::path front);
             int cloneParentDirsIntoVolume(Springy::Volume::IVolume *volume, const boost::filesystem::path path);
             int copy_xattrs(Springy::Volume::IVolume *src, Springy::Volume::IVolume *dst, const boost::filesystem::path path);
 

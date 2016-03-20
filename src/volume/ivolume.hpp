@@ -29,14 +29,11 @@ namespace Springy{
                 virtual ~IVolume(){}
                 virtual std::string string() = 0;
                 virtual bool isLocal() = 0;
-                virtual int lstat(boost::filesystem::path v_file_name, struct ::stat *buf) = 0;
-                virtual int stat(boost::filesystem::path v_file_name, struct ::stat *buf) = 0;
-                virtual int fstat(boost::filesystem::path v_file_name, int fd, struct ::stat *buf) = 0;
+                virtual int getattr(boost::filesystem::path v_file_name, struct ::stat *buf) = 0;
 
                 virtual int statvfs(boost::filesystem::path v_path, struct ::statvfs *stat) = 0;
 
                 virtual int chown(boost::filesystem::path v_file_name, uid_t owner, gid_t group) = 0;
-                virtual int fchown(boost::filesystem::path v_file_name, int fd, uid_t owner, gid_t group) = 0;
 
                 virtual int chmod(boost::filesystem::path v_file_name, mode_t mode) = 0;
                 virtual int mkdir(boost::filesystem::path v_file_name, mode_t mode) = 0;
@@ -52,10 +49,10 @@ namespace Springy{
                 virtual int open(boost::filesystem::path v_file_name, int flags, mode_t mode=0) = 0;
                 virtual int creat(boost::filesystem::path v_file_name, mode_t mode) = 0;
                 virtual int close(boost::filesystem::path v_file_name, int fd) = 0;
-                
-                virtual ssize_t pread(boost::filesystem::path v_file_name, int fd, void *buf, size_t count, off_t offset) = 0;
+
+                virtual ssize_t write(boost::filesystem::path v_file_name, int fd, const void *buf, size_t count, off_t offset) = 0;
+                virtual ssize_t read(boost::filesystem::path v_file_name, int fd, void *buf, size_t count, off_t offset) = 0;
                 virtual int truncate(boost::filesystem::path v_path, off_t length) = 0;
-                virtual int ftruncate(boost::filesystem::path v_file_name, int fd, off_t length) = 0;
 
                 virtual int access(boost::filesystem::path v_path, int mode) = 0;
                 virtual int unlink(boost::filesystem::path v_path) = 0;

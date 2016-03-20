@@ -29,22 +29,11 @@ namespace Springy{
         std::string File::string(){ return this->u.string(); }
         bool File::isLocal(){ return true; }
 
-        int File::lstat(boost::filesystem::path v_file_name, struct stat *buf){
+        int File::getattr(boost::filesystem::path v_file_name, struct stat *buf){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
             boost::filesystem::path p = this->concatPath(this->u.path(), v_file_name);
             return this->libc->lstat(__LINE__, p.c_str(), buf);
-        }
-        int File::stat(boost::filesystem::path v_file_name, struct stat *buf){
-            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-            boost::filesystem::path p = this->concatPath(this->u.path(), v_file_name);
-            return this->libc->stat(__LINE__, p.c_str(), buf);
-        }
-        int File::fstat(boost::filesystem::path v_file_name, int fd, struct ::stat *buf){
-            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-            return this->libc->fstat(__LINE__, fd, buf);
         }
         int File::statvfs(boost::filesystem::path v_path, struct ::statvfs *stat){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
@@ -59,13 +48,6 @@ namespace Springy{
 
             boost::filesystem::path p = this->concatPath(this->u.path(), v_file_name);
             return this->libc->chown(__LINE__, p.c_str(), owner, group);
-        }
-        int File::fchown(boost::filesystem::path v_file_name, int fd, uid_t owner, gid_t group){
-            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-            
-            if(this->readonly){ errno = EROFS; return -1; }
-
-            return this->libc->fchown(__LINE__, fd, owner, group);
         }
 
         int File::chmod(boost::filesystem::path v_file_name, mode_t mode){
@@ -171,11 +153,14 @@ namespace Springy{
             return this->libc->close(__LINE__, fd);
         }
         
-        ssize_t File::pread(boost::filesystem::path v_file_name, int fd, void *buf, size_t count, off_t offset){
+        ssize_t File::write(boost::filesystem::path v_file_name, int fd, const void *buf, size_t count, off_t offset){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+            return this->libc->pwrite(__LINE__, fd, buf, count, offset);
+        }
+        ssize_t File::read(boost::filesystem::path v_file_name, int fd, void *buf, size_t count, off_t offset){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             return this->libc->pread(__LINE__, fd, buf, count, offset);
         }
-
         int File::truncate(boost::filesystem::path v_path, off_t length){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             
@@ -183,14 +168,6 @@ namespace Springy{
 
             boost::filesystem::path p = this->concatPath(this->u.path(), v_path);
             return this->libc->truncate(__LINE__, p.c_str(), length);
-        }
-        int File::ftruncate(boost::filesystem::path v_file_name, int fd, off_t length){
-            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-            
-            if(this->readonly){ errno = EROFS; return -1; }
-
-            boost::filesystem::path p = this->concatPath(this->u.path(), v_file_name);
-            return this->libc->ftruncate(__LINE__, fd, length);
         }
 
         int File::access(boost::filesystem::path v_path, int mode){

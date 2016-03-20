@@ -7,17 +7,19 @@
 
 namespace Springy{
     namespace Volume{
-        class File : public Springy::Volume::IVolume{
+        class Springy : public ::Springy::Volume::IVolume{
             protected:
-                Springy::LibC::ILibC *libc;
-                Springy::Util::Uri u;
+                ::Springy::LibC::ILibC *libc;
+                ::Springy::Util::Uri u;
                 bool readonly;
 
-                boost::filesystem::path concatPath(const boost::filesystem::path &p1, const boost::filesystem::path &p2);
+                std::string sendRequest(std::string host, int port, std::string path, std::string &params);
 
             public:
-                File(Springy::LibC::ILibC *libc, Springy::Util::Uri u);
-                virtual ~File();
+                Springy(::Springy::LibC::ILibC *libc, ::Springy::Util::Uri u);
+                virtual ~Springy();
+
+                boost::filesystem::path concatPath(const boost::filesystem::path &p1, const boost::filesystem::path &p2);
 
                 virtual std::string string();
                 virtual bool isLocal();
@@ -43,8 +45,8 @@ namespace Springy{
                 virtual int creat(boost::filesystem::path v_file_name, mode_t mode);
                 virtual int close(boost::filesystem::path v_file_name, int fd);
 
-                virtual ssize_t write(boost::filesystem::path v_file_name, int fd, const void *buf, size_t count, off_t offset);
-                virtual ssize_t read(boost::filesystem::path v_file_name, int fd, void *buf, size_t count, off_t offset);
+                virtual ssize_t pread(boost::filesystem::path v_file_name, int fd, void *buf, size_t count, off_t offset);
+
                 virtual int truncate(boost::filesystem::path v_path, off_t length);
 
                 virtual int access(boost::filesystem::path v_path, int mode);

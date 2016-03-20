@@ -209,49 +209,61 @@ Fuse::~Fuse(){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 }
 
-Springy::Volume::IVolume* Fuse::findVolume(const boost::filesystem::path file_name, struct stat *buf){
+Fuse::VolumeInfo Fuse::findVolume(const boost::filesystem::path file_name){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-	struct stat b;
-	if(buf==NULL){ buf = &b; }
-    boost::filesystem::path foundPath;
+    Fuse::VolumeInfo vinfo;
 
-    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > vols = this->config->volumes.getVolumesByVirtualFileName(file_name);
+    Springy::Volumes::VolumeRelativeFile vols = this->config->volumes.getVolumesByVirtualFileName(file_name);
+    vinfo.virtualMountPoint      = vols.virtualMountPoint;
+    vinfo.volumeRelativeFileName = vols.volumeRelativeFileName;
 
-    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> >::iterator it;
-    for(it=vols.begin();it != vols.end();it++){
-        if(it->first->lstat(file_name, buf) != -1){
-            return it->first;
+    std::set<Springy::Volume::IVolume*>::iterator it;
+    for(it=vols.volumes.begin();it != vols.volumes.end();it++){
+        Springy::Volume::IVolume *volume = *it;
+        if(volume->getattr(vols.volumeRelativeFileName, &vinfo.st) != -1){
+            vinfo.volume   = volume;
+            volume->statvfs(vols.volumeRelativeFileName, &vinfo.stvfs);
+            //vinfo.curspace = vinfo.buf.f_bsize * vinfo.buf.f_bavail;
+
+            return vinfo;
         }
     }
 
     throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "file not found";
 }
-Springy::Volume::IVolume* Fuse::getMaxFreeSpaceVolume(const boost::filesystem::path path, uintmax_t *space){
+Fuse::VolumeInfo Fuse::getMaxFreeSpaceVolume(const boost::filesystem::path path){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > vols = this->config->volumes.getVolumesByVirtualFileName(path);
+    Springy::Volumes::VolumeRelativeFile vols = this->config->volumes.getVolumesByVirtualFileName(path);
+    
+    Fuse::VolumeInfo vinfo;
+    vinfo.virtualMountPoint      = vols.virtualMountPoint;
+    vinfo.volumeRelativeFileName = vols.volumeRelativeFileName;
 
     Springy::Volume::IVolume* maxFreeSpaceVolume = NULL;
     struct statvfs stat;
 
-    uintmax_t max_space = 0;
-    if(space==NULL){
-        space = &max_space;
-    }
-    *space = 0;
+    uintmax_t space = 0;
 
-    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> >::iterator it;
-    for(it=vols.begin();it != vols.end();it++){
-        it->first->statvfs(path, &stat);
+    std::set<Springy::Volume::IVolume*>::iterator it;
+    for(it=vols.volumes.begin();it != vols.volumes.end();it++){
+        Springy::Volume::IVolume *volume = *it;
+        struct statvfs stvfs;
+
+        volume->statvfs(vols.volumeRelativeFileName, &stvfs);
 		uintmax_t curspace = stat.f_bsize * stat.f_bavail;
 
-        if(maxFreeSpaceVolume == NULL || curspace > *space){
-            maxFreeSpaceVolume = it->first;
-            *space = curspace;
+        if(maxFreeSpaceVolume == NULL || curspace > space){
+            vinfo.volume = volume;
+            vinfo.stvfs  = stvfs;
+            volume->getattr(vols.volumeRelativeFileName, &vinfo.st);
+            maxFreeSpaceVolume = volume;
+
+            space = curspace;
         }
     }
-    if(!maxFreeSpaceVolume){ return maxFreeSpaceVolume; }
+    if(!maxFreeSpaceVolume){ return vinfo; }
 
     throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "no space";
 }
@@ -261,6 +273,28 @@ boost::filesystem::path Fuse::get_parent_path(const boost::filesystem::path p){
     boost::filesystem::path parent = p.parent_path();
     if(parent.empty()){ throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "no parent directory"; }
     return parent;
+}
+
+boost::filesystem::path Fuse::get_remaining(const boost::filesystem::path p, const boost::filesystem::path front){
+    boost::filesystem::path result;
+
+    bool diff = false;
+
+    boost::filesystem::path::iterator pit = p.begin(), fit = front.begin();
+    for(;pit!=p.end() && fit!=front.end();pit++,fit++){
+        if(*pit != *fit){
+            diff = true;
+            break;
+        }
+    }
+    if(fit == front.end()){ diff = true; }
+    if(diff){
+        for(;pit!=p.end();pit++){
+            result /= *pit;
+        }
+    }
+
+    return result;
 }
 
 int Fuse::cloneParentDirsIntoVolume(Springy::Volume::IVolume *volume, const boost::filesystem::path path){
@@ -276,7 +310,7 @@ int Fuse::cloneParentDirsIntoVolume(Springy::Volume::IVolume *volume, const boos
 
 	struct stat st;
 	// already exists
-    if (volume->stat(parent, &st) == 0)
+    if (volume->getattr(parent, &st) == 0)
 	{
         if(!S_ISDIR(st.st_mode)){
             errno = ENOTDIR;
@@ -286,9 +320,9 @@ int Fuse::cloneParentDirsIntoVolume(Springy::Volume::IVolume *volume, const boos
 		return 0;
 	}
 
-    Springy::Volume::IVolume *sourceVolume = NULL;
+    Fuse::VolumeInfo vinfo;
     try{
-        sourceVolume = Fuse::findVolume(parent, &st);
+        vinfo = Fuse::findVolume(parent);
     }
     catch(...){
         Trace(__FILE__, __PRETTY_FUNCTION__, __LINE__);
@@ -309,7 +343,7 @@ int Fuse::cloneParentDirsIntoVolume(Springy::Volume::IVolume *volume, const boos
 		volume->chmod(parent, st.st_mode);
 #ifndef WITHOUT_XATTR
         // copy extended attributes of parent dir
-        this->copy_xattrs(sourceVolume, volume, parent);
+        this->copy_xattrs(vinfo.volume, volume, vinfo.volumeRelativeFileName);
 #endif
 	}
 	else
@@ -460,8 +494,8 @@ void Fuse::saveFd(boost::filesystem::path file, Springy::Volume::IVolume *volume
     Synchronized syncOpenFiles(this->openFiles);
 
     int *syncToken = NULL;
-    openFiles_set::index<of_idx_fuseFile>::type &idx = this->openFiles.get<of_idx_fuseFile>();
-    openFiles_set::index<of_idx_fuseFile>::type::iterator it = idx.find(file);
+    openFiles_set::index<of_idx_volumeFile>::type &idx = this->openFiles.get<of_idx_volumeFile>();
+    openFiles_set::index<of_idx_volumeFile>::type::iterator it = idx.find(file);
     if(it!=idx.end()){
         syncToken = it->syncToken;
     }
@@ -622,7 +656,8 @@ int Fuse::op_getattr(const boost::filesystem::path file_name, struct stat *buf){
     if(buf==NULL){ return -EINVAL; }
 
 	try{
-		this->findVolume(file_name, buf);
+		VolumeInfo vinfo = this->findVolume(file_name);
+        *buf = vinfo.st;
 		return 0;
 	}
 	catch(...){
@@ -650,13 +685,14 @@ int Fuse::op_statfs(const boost::filesystem::path path, struct statvfs *buf){
 
     unsigned long min_block = 0, min_frame = 0;
 
-    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > vols = this->config->volumes.getVolumesByVirtualFileName(path);
-    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> >::iterator it;
-    for(it=vols.begin();it != vols.end();it++){
-        if(it->first->isLocal()){
+    Springy::Volumes::VolumeRelativeFile vols = this->config->volumes.getVolumesByVirtualFileName(path);
 
+    std::set<Springy::Volume::IVolume*>::iterator it;
+    for(it=vols.volumes.begin();it != vols.volumes.end();it++){
+        Springy::Volume::IVolume *volume = *it;
+        if(volume->isLocal()){
             struct stat st;
-            int ret = it->first->stat(path, &st);
+            int ret = volume->getattr(vols.volumeRelativeFileName, &st);
             if (ret != 0) {
                 return -errno;
             }
@@ -664,7 +700,7 @@ int Fuse::op_statfs(const boost::filesystem::path path, struct statvfs *buf){
         }
 
         struct statvfs stv;
-        int ret = it->first->statvfs(path, &stv);
+        int ret = volume->statvfs(vols.volumeRelativeFileName, &stv);
         if (ret != 0) {
             return -errno;
         }
@@ -725,20 +761,23 @@ int Fuse::op_readdir(
 {
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-    std::unordered_map<std::string, struct stat> dir_item_ht;
+    std::unordered_map<std::string, struct stat> directories;
     std::unordered_map<std::string, struct stat>::iterator dit;
     struct stat st;
 	size_t found=0;
     std::vector<Springy::Volume::IVolume*> dirs;
 
-    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > vols = this->config->volumes.getVolumesByVirtualFileName(dirname);
-    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> >::iterator it;
-    for(it=vols.begin();it != vols.end();it++){
+    Springy::Volumes::VolumeRelativeFile vols = this->config->volumes.getVolumesByVirtualFileName(dirname);
+
+    std::set<Springy::Volume::IVolume*>::iterator it;
+    for(it=vols.volumes.begin();it != vols.volumes.end();it++){
+        Springy::Volume::IVolume *volume = *it;
+
         // check if the volume actually has the given dirname
-		if (it->first->stat(dirname, &st) == 0) {
+		if (volume->getattr(vols.volumeRelativeFileName, &st) == 0) {
 			found++;
 			if (S_ISDIR(st.st_mode)) {
-                dirs.push_back(it->first);
+                dirs.push_back(volume);
 				continue;
 			}
 		}
@@ -754,10 +793,11 @@ int Fuse::op_readdir(
 
 	// read directories
 	for (size_t i = 0; i<dirs.size(); i++) {
-        dirs[i]->readdir(dirname, dir_item_ht);
+        Springy::Volume::IVolume *volume = dirs[i];
+        volume->readdir(vols.volumeRelativeFileName, directories);
 	}
 
-    for(dit=dir_item_ht.begin();dit!=dir_item_ht.end();dit++){
+    for(dit=directories.begin();dit!=directories.end();dit++){
         if (filler(buf, dit->first.c_str(), &dit->second, 0))
                 break;
     }
@@ -772,9 +812,9 @@ int Fuse::op_readlink(const boost::filesystem::path path, char *buf, size_t size
 
     int res = 0;
     try{
-        Springy::Volume::IVolume *vol = this->findVolume(path);
+        Fuse::VolumeInfo vinfo = this->findVolume(path);
         memset(buf, 0, size);
-        res = vol->readlink(path, buf, size);
+        res = vinfo.volume->readlink(vinfo.volumeRelativeFileName, buf, size);
 
         if (res >= 0)
             return 0;
@@ -796,9 +836,9 @@ int Fuse::op_create(const boost::filesystem::path file, mode_t mode, struct fuse
         // file exists
     }
     catch(...){
-        Springy::Volume::IVolume *maxFreeVolume = NULL;
+        Fuse::VolumeInfo vinfo;
         try{
-             maxFreeVolume = this->getMaxFreeSpaceVolume(file);
+             vinfo = this->getMaxFreeSpaceVolume(file);
         }
         catch(...){
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
@@ -806,21 +846,21 @@ int Fuse::op_create(const boost::filesystem::path file, mode_t mode, struct fuse
             return -ENOSPC;
         }
 
-        this->cloneParentDirsIntoVolume(maxFreeVolume, file);
+        this->cloneParentDirsIntoVolume(vinfo.volume, vinfo.volumeRelativeFileName);
 
         // file doesnt exist
-        int fd = maxFreeVolume->creat(file, mode);
+        int fd = vinfo.volume->creat(vinfo.volumeRelativeFileName, mode);
         if(fd == -1){
             return -errno;
         }
         try{
-            this->saveFd(file, maxFreeVolume, fd, O_CREAT|O_WRONLY|O_TRUNC);
+            this->saveFd(vinfo.volumeRelativeFileName, vinfo.volume, fd, O_CREAT|O_WRONLY|O_TRUNC);
             fi->fh = fd;
         }
         catch(...){
             if(errno==0){ errno = ENOMEM; }
             int rval = errno;
-            maxFreeVolume->close(file, fd);
+            vinfo.volume->close(vinfo.volumeRelativeFileName, fd);
 
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
@@ -834,26 +874,28 @@ int Fuse::op_create(const boost::filesystem::path file, mode_t mode, struct fuse
 
 int Fuse::op_open(const boost::filesystem::path file, struct fuse_file_info *fi){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-    
+
     if(this->readonly && (fi->flags&O_RDONLY) != O_RDONLY){ return -EROFS; }
 
     fi->fh = 0;
+    
+    Fuse::VolumeInfo vinfo;
 
     try{
         int fd = 0;
-        Springy::Volume::IVolume *volume = this->findVolume(file);
-        fd = volume->open(file, fi->flags);
+        vinfo = this->findVolume(file);
+        fd = vinfo.volume->open(vinfo.volumeRelativeFileName, fi->flags);
 		if (fd == -1) {
 			return -errno;
 		}
 
         try{
-            this->saveFd(file, volume, fd, fi->flags);
+            this->saveFd(vinfo.volumeRelativeFileName, vinfo.volume, fd, fi->flags);
         }
         catch(...){
             if(errno==0){ errno = ENOMEM; }
             int rval = errno;
-            volume->close(file, fd);
+            vinfo.volume->close(vinfo.volumeRelativeFileName, fd);
 
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
@@ -868,19 +910,18 @@ int Fuse::op_open(const boost::filesystem::path file, struct fuse_file_info *fi)
         t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
     }
 
-    Springy::Volume::IVolume *maxFreeVolume = NULL;
     try{
-         maxFreeVolume = this->getMaxFreeSpaceVolume(file);
+         vinfo = this->getMaxFreeSpaceVolume(file);
     }
     catch(...){
         t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
         return -ENOSPC;
     }
 
-	this->cloneParentDirsIntoVolume(maxFreeVolume, file);
+	this->cloneParentDirsIntoVolume(vinfo.volume, vinfo.volumeRelativeFileName);
 
     int fd = -1;
-	fd = maxFreeVolume->open(file, fi->flags);
+	fd = vinfo.volume->open(vinfo.volumeRelativeFileName, fi->flags);
 
 	if (fd == -1) {
 		return -errno;
@@ -891,19 +932,19 @@ int Fuse::op_open(const boost::filesystem::path file, struct fuse_file_info *fi)
         gid_t gid;
         uid_t uid;
         this->determineCaller(&uid, &gid);
-		if (maxFreeVolume->fstat(file, fd, &st) == 0) {
+		if (vinfo.volume->getattr(vinfo.volumeRelativeFileName, &st) == 0) {
 			// parent directory is SGID'ed
 			if (st.st_gid != getgid()) gid = st.st_gid;
 		}
-		maxFreeVolume->fchown(file, fd, uid, gid);
+		vinfo.volume->chown(vinfo.volumeRelativeFileName, uid, gid);
 	}
 
     try{
         Synchronized syncOpenFiles(this->openFiles);
 
         int *syncToken = NULL;
-        openFiles_set::index<of_idx_fuseFile>::type &idx = this->openFiles.get<of_idx_fuseFile>();
-        openFiles_set::index<of_idx_fuseFile>::type::iterator it = idx.find(file);
+        openFiles_set::index<of_idx_volumeFile>::type &idx = this->openFiles.get<of_idx_volumeFile>();
+        openFiles_set::index<of_idx_volumeFile>::type::iterator it = idx.find(vinfo.volumeRelativeFileName);
         if(it!=idx.end()){
             syncToken = it->syncToken;
         }
@@ -911,13 +952,13 @@ int Fuse::op_open(const boost::filesystem::path file, struct fuse_file_info *fi)
             syncToken = new int;
         }
 
-        struct openFile of = { file, maxFreeVolume, fd, fi->flags, syncToken, true };
+        struct openFile of = { vinfo.volumeRelativeFileName, vinfo.volume, fd, fi->flags, syncToken, true };
         this->openFiles.insert(of);
     }
     catch(...){
         if(errno==0){ errno = ENOMEM; }
         int rval = errno;
-        maxFreeVolume->close(file, fd);
+        vinfo.volume->close(vinfo.volumeRelativeFileName, fd);
 
         t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
@@ -946,11 +987,11 @@ int Fuse::op_release(const boost::filesystem::path path, struct fuse_file_info *
         it->volume->close(path, fd);
 
         int *syncToken = it->syncToken;
-        boost::filesystem::path fuseFile = it->fuseFile;
+        boost::filesystem::path volumeFile = it->volumeFile;
         idx.erase(it);
 
-        openFiles_set::index<of_idx_fuseFile>::type &fidx = this->openFiles.get<of_idx_fuseFile>();
-        if(fidx.find(fuseFile)==fidx.end()){
+        openFiles_set::index<of_idx_volumeFile>::type &vidx = this->openFiles.get<of_idx_volumeFile>();
+        if(vidx.find(volumeFile)==vidx.end()){
             delete syncToken;
         }
     }catch(...){
@@ -984,7 +1025,7 @@ int Fuse::op_read(const boost::filesystem::path file, char *buf, size_t count, o
 
         Springy::Volume::IVolume *volume = it->volume;
         ssize_t res;
-        res = volume->pread(file, fd, buf, count, offset);
+        res = volume->read(file, fd, buf, count, offset);
         if (res == -1){
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             return -errno;
@@ -1039,7 +1080,7 @@ int Fuse::op_write(const boost::filesystem::path file, const char *buf, size_t c
     Synchronized sync(syncToken);
 
     errno = 0;
-	res = this->libc->pwrite(__LINE__, fd, buf, count, offset);
+	res = volume->write(file, fd, buf, count, offset);
 	if ((res >= 0) || (res == -1 && errno != ENOSPC)) {
 		if (res == -1) {
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
@@ -1049,7 +1090,7 @@ int Fuse::op_write(const boost::filesystem::path file, const char *buf, size_t c
 	}
 
     struct stat st;
-    fstat(fd, &st);
+    volume->getattr(file, &st);
 
     // write failed, cause of no space left
     errno = ENOSPC;
@@ -1075,8 +1116,8 @@ int Fuse::op_truncate(const boost::filesystem::path path, off_t size){
     if(this->readonly){ return -EROFS; }
 
     try{
-        Springy::Volume::IVolume *vol = this->findVolume(path);
-        int res = vol->truncate(path, size);
+        Fuse::VolumeInfo vinfo = this->findVolume(path);
+        int res = vinfo.volume->truncate(vinfo.volumeRelativeFileName, size);
 
 		if (res == -1){
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
@@ -1105,7 +1146,7 @@ int Fuse::op_ftruncate(const boost::filesystem::path path, off_t size, struct fu
             errno = EINVAL;
             return -errno;
         }
-        if(it->volume->ftruncate(path, fd, size) == -1){
+        if(it->volume->truncate(it->volumeFile, size) == -1){
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 		    return -errno;
         }
@@ -1119,12 +1160,12 @@ int Fuse::op_ftruncate(const boost::filesystem::path path, off_t size, struct fu
 
 int Fuse::op_access(const boost::filesystem::path path, int mode){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-    
+
     if(this->readonly && (mode&F_OK) != F_OK && (mode&R_OK) != R_OK){ return -EROFS; }
 
     try{
-        Springy::Volume::IVolume *vol = this->findVolume(path);
-        int res = vol->access(path, mode);
+        Fuse::VolumeInfo vinfo = this->findVolume(path);
+        int res = vinfo.volume->access(vinfo.volumeRelativeFileName, mode);
 
 		if (res == -1){
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
@@ -1143,9 +1184,9 @@ int Fuse::op_mkdir(const boost::filesystem::path path, mode_t mode){
     
     if(this->readonly){ return -EROFS; }
 
-    Springy::Volume::IVolume *vol = NULL;
+    Fuse::VolumeInfo vinfo;
     try{
-        vol = this->findVolume(path);
+        vinfo = this->findVolume(path);
 
         errno = EEXIST;
         return -errno;
@@ -1162,7 +1203,7 @@ int Fuse::op_mkdir(const boost::filesystem::path path, mode_t mode){
     }
 
     try{
-        vol = this->getMaxFreeSpaceVolume(path);
+        vinfo = this->getMaxFreeSpaceVolume(path);
     }
     catch(...){
 		errno = ENOSPC;
@@ -1170,19 +1211,19 @@ int Fuse::op_mkdir(const boost::filesystem::path path, mode_t mode){
 		return -errno;
     }
 
-    this->cloneParentDirsIntoVolume(vol, path);
-	if (vol->mkdir(path, mode) == 0) {
+    this->cloneParentDirsIntoVolume(vinfo.volume, vinfo.volumeRelativeFileName);
+	if (vinfo.volume->mkdir(vinfo.volumeRelativeFileName, mode) == 0) {
 		if (this->libc->getuid(__LINE__) == 0) {
 			struct stat st;
             gid_t gid;
             uid_t uid;
             this->determineCaller(&uid, &gid);
-			if (vol->lstat(path, &st) == 0) {
+			if (vinfo.volume->getattr(vinfo.volumeRelativeFileName, &st) == 0) {
 				// parent directory is SGID'ed
 				if (st.st_gid != this->libc->getgid(__LINE__))
 					gid = st.st_gid;
 			}
-			vol->chown(path, uid, gid);
+			vinfo.volume->chown(vinfo.volumeRelativeFileName, uid, gid);
 		}
 		return 0;
 	}
@@ -1196,8 +1237,8 @@ int Fuse::op_rmdir(const boost::filesystem::path path){
     if(this->readonly){ return -EROFS; }
 
     try{
-        Springy::Volume::IVolume *vol = this->findVolume(path);
-        int res = vol->rmdir(path);
+        Fuse::VolumeInfo vinfo = this->findVolume(path);
+        int res = vinfo.volume->rmdir(vinfo.volumeRelativeFileName);
         if (res == -1){
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             return -errno;
@@ -1216,8 +1257,8 @@ int Fuse::op_unlink(const boost::filesystem::path path){
     if(this->readonly){ return -EROFS; }
 
     try{
-        Springy::Volume::IVolume *vol = this->findVolume(path);
-        int res = vol->unlink(path);
+        Fuse::VolumeInfo vinfo = this->findVolume(path);
+        int res = vinfo.volume->unlink(vinfo.volumeRelativeFileName);
 
         if (res == -1){
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
@@ -1246,13 +1287,13 @@ int Fuse::op_rename(const boost::filesystem::path from, const boost::filesystem:
     boost::filesystem::path fromParent = this->get_parent_path(from);
     boost::filesystem::path toParent = this->get_parent_path(to);
 
-    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > fromVolumes = this->config->volumes.getVolumesByVirtualFileName(from);
-    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> >::iterator it;
+    Springy::Volumes::VolumeRelativeFile fromVolumes = this->config->volumes.getVolumesByVirtualFileName(from);
 
-    for(it=fromVolumes.begin();it!=fromVolumes.end();it++){
-        if(it->first->stat(from, &st)!=0){ continue; }
+    std::set<Springy::Volume::IVolume*>::iterator it;
+    for(it=fromVolumes.volumes.begin();it != fromVolumes.volumes.end();it++){
+        if((*it)->getattr(fromVolumes.volumeRelativeFileName, &st)!=0){ continue; }
 
-        res = it->first->rename(from, to);
+        res = (*it)->rename(fromVolumes.volumeRelativeFileName, to);
         if (res == -1) {
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             return -errno;
@@ -1271,15 +1312,15 @@ int Fuse::op_utimens(const boost::filesystem::path path, const struct timespec t
     int res;
     struct stat st;
 
-    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > pathVolumes = this->config->volumes.getVolumesByVirtualFileName(path);
-    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> >::iterator it;
+    Springy::Volumes::VolumeRelativeFile pathVolumes = this->config->volumes.getVolumesByVirtualFileName(path);
 
-    for(it=pathVolumes.begin();it!=pathVolumes.end();it++){
-        if(it->first->stat(path, &st)!=0){ continue; }
+    std::set<Springy::Volume::IVolume*>::iterator it;
+    for(it=pathVolumes.volumes.begin();it != pathVolumes.volumes.end();it++){
+        if((*it)->getattr(pathVolumes.volumeRelativeFileName, &st)!=0){ continue; }
         
         flag_found = 1;
 
-        res = it->first->utimensat(path, ts);
+        res = (*it)->utimensat(pathVolumes.volumeRelativeFileName, ts);
         if (res == -1) {
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             return -errno;
@@ -1301,14 +1342,14 @@ int Fuse::op_chmod(const boost::filesystem::path path, mode_t mode){
     int res;
     struct stat st;
     
-    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > pathVolumes = this->config->volumes.getVolumesByVirtualFileName(path);
-    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> >::iterator it;
+    Springy::Volumes::VolumeRelativeFile pathVolumes = this->config->volumes.getVolumesByVirtualFileName(path);
 
-    for(it=pathVolumes.begin();it!=pathVolumes.end();it++){
-        if(it->first->stat(path, &st)!=0){ continue; }
+    std::set<Springy::Volume::IVolume*>::iterator it;
+    for(it=pathVolumes.volumes.begin();it != pathVolumes.volumes.end();it++){
+        if((*it)->getattr(pathVolumes.volumeRelativeFileName, &st)!=0){ continue; }
 
         flag_found = 1;
-        res = it->first->chmod(path, mode);
+        res = (*it)->chmod(pathVolumes.volumeRelativeFileName, mode);
 
 		if (res == -1){
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
@@ -1331,14 +1372,14 @@ int Fuse::op_chown(const boost::filesystem::path path, uid_t uid, gid_t gid){
     int res;
     struct stat st;
 
-    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > pathVolumes = this->config->volumes.getVolumesByVirtualFileName(path);
-    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> >::iterator it;
+    Springy::Volumes::VolumeRelativeFile pathVolumes = this->config->volumes.getVolumesByVirtualFileName(path);
 
-    for(it=pathVolumes.begin();it!=pathVolumes.end();it++){
-        if(it->first->stat(path, &st)!=0){ continue; }
+    std::set<Springy::Volume::IVolume*>::iterator it;
+    for(it=pathVolumes.volumes.begin();it != pathVolumes.volumes.end();it++){
+        if((*it)->getattr(pathVolumes.volumeRelativeFileName, &st)!=0){ continue; }
 
         flag_found = 1;
-        res = it->first->chown(path, uid, gid);
+        res = (*it)->chown(pathVolumes.volumeRelativeFileName, uid, gid);
 
 		if (res == -1){
             t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
@@ -1354,45 +1395,54 @@ int Fuse::op_chown(const boost::filesystem::path path, uid_t uid, gid_t gid){
 
 int Fuse::op_symlink(const boost::filesystem::path oldname, const boost::filesystem::path newname){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-    
+
     if(this->readonly){ return -EROFS; }
 
-	int i, res;
-
-    Springy::Volume::IVolume *volume;
+	int res;
+    
+    // symlink only works on same volume type
+    Fuse::VolumeInfo vinfo;
     boost::filesystem::path parent;
     try{
         parent = this->get_parent_path(newname);
-        volume = this->findVolume(parent);
+        vinfo = this->findVolume(parent);
     }catch(...){
         errno = ENOENT;
         t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 		return -errno;
     }
 
-	for (i = 0; i < 2; i++) {
-		if (i) {
-            try{
-			    volume = this->getMaxFreeSpaceVolume(parent);
-            }catch(...){
-				errno = ENOSPC;
-                t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-				return -errno;
-			}
+    // symlink into found Volume
+    res = vinfo.volume->symlink(this->config->volumes.convertFuseFilenameToVolumeRelativeFilename(vinfo.volume, oldname),
+                                this->config->volumes.convertFuseFilenameToVolumeRelativeFilename(vinfo.volume, newname));
+    if(res==0){
+        return 0;
+    }
+    if(errno != ENOSPC){
+        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+        return -errno;
+    }
 
-			this->cloneParentDirsIntoVolume(volume, newname);
-		}
+    try{
+        vinfo = this->getMaxFreeSpaceVolume(parent);
+    }catch(...){
+        errno = ENOSPC;
+        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+        return -errno;
+    }
 
+    // symlink into max free space volume
+    this->cloneParentDirsIntoVolume(vinfo.volume, this->config->volumes.convertFuseFilenameToVolumeRelativeFilename(vinfo.volume, newname));
+    res = vinfo.volume->symlink(this->config->volumes.convertFuseFilenameToVolumeRelativeFilename(vinfo.volume, oldname),
+                                this->config->volumes.convertFuseFilenameToVolumeRelativeFilename(vinfo.volume, newname));
+    if(res==0){
+        return 0;
+    }
+    if(errno != ENOSPC){
+        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+        return -errno;
+    }
 
-		res = volume->symlink(oldname, newname);
-
-		if (res == 0)
-			return 0;
-		if (errno != ENOSPC){
-            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-			return -errno;
-        }
-	}
     t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 	return -errno;
 }
@@ -1403,23 +1453,24 @@ int Fuse::op_link(const boost::filesystem::path oldname, const boost::filesystem
     if(this->readonly){ return -EROFS; }
 
     int res = 0;
-    Springy::Volume::IVolume *volume;
+    Fuse::VolumeInfo vinfo;
 
     try{
-        volume = this->findVolume(oldname);
+        vinfo = this->findVolume(oldname);
     }catch(...){
 		errno = ENOENT;
         t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 		return -errno;
     }
 
-	res = this->cloneParentDirsIntoVolume(volume, newname);
+	res = this->cloneParentDirsIntoVolume(vinfo.volume, this->config->volumes.convertFuseFilenameToVolumeRelativeFilename(vinfo.volume, newname));
 	if (res != 0) {
         t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 		return res;
 	}
 
-	res = volume->link(oldname, newname);
+	res = vinfo.volume->link(this->config->volumes.convertFuseFilenameToVolumeRelativeFilename(vinfo.volume, oldname),
+                             this->config->volumes.convertFuseFilenameToVolumeRelativeFilename(vinfo.volume, newname));
 
 	if (res == 0)
 		return 0;
@@ -1434,10 +1485,10 @@ int Fuse::op_mknod(const boost::filesystem::path path, mode_t mode, dev_t rdev){
 
 	int res, i;
     boost::filesystem::path parent;
-    Springy::Volume::IVolume *volume;
+    Fuse::VolumeInfo vinfo;
     try{
         parent = this->get_parent_path(path);
-        volume = this->findVolume(parent);
+        vinfo = this->findVolume(parent);
     }catch(...){
         errno = ENOENT;
         t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
@@ -1447,31 +1498,31 @@ int Fuse::op_mknod(const boost::filesystem::path path, mode_t mode, dev_t rdev){
 	for (i = 0; i < 2; i++) {
 		if (i) {
             try{
-                volume = this->getMaxFreeSpaceVolume(parent);
+                vinfo = this->getMaxFreeSpaceVolume(parent);
             }catch(...){
 				errno = ENOSPC;
                 t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 				return -errno;
             }
 
-			this->cloneParentDirsIntoVolume(volume, path);
+			this->cloneParentDirsIntoVolume(vinfo.volume, this->config->volumes.convertFuseFilenameToVolumeRelativeFilename(vinfo.volume, path));
 		}
 
 		if (S_ISREG(mode)) {
-			res = volume->open(path, O_CREAT | O_EXCL | O_WRONLY, mode);
+			res = vinfo.volume->open(path, O_CREAT | O_EXCL | O_WRONLY, mode);
 			if (res >= 0)
-				res = volume->close(path, res);
+				res = vinfo.volume->close(path, res);
 		} else if (S_ISFIFO(mode))
-			res = volume->mkfifo(path, mode);
+			res = vinfo.volume->mkfifo(path, mode);
 		else
-			res = volume->mknod(path, mode, rdev);
+			res = vinfo.volume->mknod(path, mode, rdev);
 
 		if (res != -1) {
 			if (this->libc->getuid(__LINE__) == 0) {
                 uid_t uid;
                 gid_t gid;
                 this->determineCaller(&uid, &gid);
-				volume->chown(path, uid, gid);
+				vinfo.volume->chown(path, uid, gid);
 			}
 
 			return 0;

@@ -201,14 +201,17 @@ void Httpd::list_directory(struct ns_connection *nc, struct http_message *hm){
 
     errno = 0;
 
-    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> > vols = this->config->volumes.getVolumes();
-    std::set<std::pair<Springy::Volume::IVolume*, boost::filesystem::path> >::iterator it;
+    Springy::Volumes::VolumesMap vols = this->config->volumes.getVolumes();
+    Springy::Volumes::VolumesMap::iterator it;
     std::stringstream ss;
 
     ss << "{success: false, message: \"volumes loaded\", data:";
     ss << "[";
     for(it=vols.begin();it!=vols.end();it++){
-        ss << "{ volume: \"" << it->first->string() << "\", virtualmountpoint: \"" << it->second.string() << "\" }";
+        boost::filesystem::path virtualMountPoint = it->first;
+        for(size_t i=0;i<it->second.size();i++){
+            ss << "{ volume: \"" << it->second[i]->string() << "\", virtualmountpoint: \"" << virtualMountPoint.string() << "\" }";
+        }
     }
     ss << "]";
     ss << "}";
