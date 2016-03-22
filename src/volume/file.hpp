@@ -45,7 +45,7 @@ namespace Springy{
 
                 virtual ssize_t write(boost::filesystem::path v_file_name, int fd, const void *buf, size_t count, off_t offset);
                 virtual ssize_t read(boost::filesystem::path v_file_name, int fd, void *buf, size_t count, off_t offset);
-                virtual int truncate(boost::filesystem::path v_path, off_t length);
+                virtual int truncate(boost::filesystem::path v_path, int fd, off_t length);
 
                 virtual int access(boost::filesystem::path v_path, int mode);
                 virtual int unlink(boost::filesystem::path v_path);

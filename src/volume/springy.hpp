@@ -4,6 +4,7 @@
 #include "ivolume.hpp"
 #include "../libc/ilibc.hpp"
 #include "../util/uri.hpp"
+#include "../util/json.hpp"
 
 namespace Springy{
     namespace Volume{
@@ -13,7 +14,8 @@ namespace Springy{
                 ::Springy::Util::Uri u;
                 bool readonly;
 
-                std::string sendRequest(std::string host, int port, std::string path, std::string &params);
+                nlohmann::json sendRequest(std::string host, int port, std::string path, nlohmann::json jparams);
+                struct stat readStatFromJson(nlohmann::json j);
 
             public:
                 Springy(::Springy::LibC::ILibC *libc, ::Springy::Util::Uri u);
@@ -47,7 +49,7 @@ namespace Springy{
 
                 virtual ssize_t pread(boost::filesystem::path v_file_name, int fd, void *buf, size_t count, off_t offset);
 
-                virtual int truncate(boost::filesystem::path v_path, off_t length);
+                virtual int truncate(boost::filesystem::path v_path, int fd, off_t length);
 
                 virtual int access(boost::filesystem::path v_path, int mode);
                 virtual int unlink(boost::filesystem::path v_path);

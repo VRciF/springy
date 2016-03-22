@@ -87,6 +87,8 @@ namespace Springy{
 
         int File::utimensat(boost::filesystem::path v_path, const struct timespec times[2]){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+            
+            if(this->readonly){ errno = EROFS; return -1; }
 
             boost::filesystem::path p = this->concatPath(this->u.path(), v_path);
             return this->libc->utimensat(__LINE__, AT_FDCWD, p.c_str(), times, AT_SYMLINK_NOFOLLOW);
@@ -161,13 +163,18 @@ namespace Springy{
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             return this->libc->pread(__LINE__, fd, buf, count, offset);
         }
-        int File::truncate(boost::filesystem::path v_path, off_t length){
+        int File::truncate(boost::filesystem::path v_path, int fd, off_t length){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             
             if(this->readonly){ errno = EROFS; return -1; }
 
             boost::filesystem::path p = this->concatPath(this->u.path(), v_path);
-            return this->libc->truncate(__LINE__, p.c_str(), length);
+            if(fd < 0){
+                return this->libc->truncate(__LINE__, p.c_str(), length);
+            }
+            else{
+                return this->libc->ftruncate(__LINE__, fd, length);
+            }
         }
 
         int File::access(boost::filesystem::path v_path, int mode){

@@ -120,23 +120,18 @@ Fuse& Fuse::setUp(bool singleThreaded){
         fuseArgv.push_back(this->fuseoptions.c_str());
     }
 
-std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     this->fuse = fuse_setup(fuseArgv.size(), (char**)&fuseArgv[0], &this->fops, sizeof(this->fops),
                       &this->fmountpoint, &multithreaded, static_cast<void*>(this));
-std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     if(this->fuse==NULL){
         // fuse failed!
         throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "initializing fuse failed";
     }
 
-std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     return *this;
 }
 Fuse& Fuse::run(){
-    std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
     this->th = std::thread(Fuse::thread, this);
 
     return *this;
@@ -177,15 +172,11 @@ void Fuse::thread(Fuse *instance){
 	sigfillset(&set);
 	pthread_sigmask(SIG_SETMASK, &set, NULL);
 
-std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
 	if (instance->singleThreaded){
-        std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
 		res = fuse_loop_mt(instance->fuse);
 	}else{
-        std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
 		res = fuse_loop(instance->fuse);
 	}
-std::cout << __FILE__ << ":" << __LINE__ << ":" << __PRETTY_FUNCTION__ << std::endl;
 
 	fuse_teardown(instance->fuse, instance->fmountpoint);
 	instance->fuse = NULL;
@@ -650,6 +641,414 @@ void Fuse::op_destroy(void *arg){
 	//mhddfs_httpd_stopServer();
 }
 
+/////////////////// File descriptor operations ////////////////////////////////
+
+int Fuse::op_create(const boost::filesystem::path file, mode_t mode, struct fuse_file_info *fi){
+    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+    
+    if(this->readonly){ return -EROFS; }
+
+    try{
+        this->findVolume(file);
+        // file exists
+    }
+    catch(...){
+        Fuse::VolumeInfo vinfo;
+        try{
+             vinfo = this->getMaxFreeSpaceVolume(file);
+        }
+        catch(...){
+            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+            return -ENOSPC;
+        }
+
+        this->cloneParentDirsIntoVolume(vinfo.volume, vinfo.volumeRelativeFileName);
+
+        // file doesnt exist
+        int fd = vinfo.volume->creat(vinfo.volumeRelativeFileName, mode);
+        if(fd == -1){
+            return -errno;
+        }
+        try{
+            this->saveFd(vinfo.volumeRelativeFileName, vinfo.volume, fd, O_CREAT|O_WRONLY|O_TRUNC);
+            fi->fh = fd;
+        }
+        catch(...){
+            if(errno==0){ errno = ENOMEM; }
+            int rval = errno;
+            vinfo.volume->close(vinfo.volumeRelativeFileName, fd);
+
+            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+            return -rval;
+        }
+        return 0;
+    }
+
+    return this->op_open(file, fi);
+}
+
+int Fuse::op_open(const boost::filesystem::path file, struct fuse_file_info *fi){
+    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+    if(this->readonly && (fi->flags&O_RDONLY) != O_RDONLY){ return -EROFS; }
+
+    fi->fh = 0;
+    
+    Fuse::VolumeInfo vinfo;
+
+    try{
+        int fd = 0;
+        vinfo = this->findVolume(file);
+        fd = vinfo.volume->open(vinfo.volumeRelativeFileName, fi->flags);
+		if (fd == -1) {
+			return -errno;
+		}
+
+        try{
+            this->saveFd(vinfo.volumeRelativeFileName, vinfo.volume, fd, fi->flags);
+        }
+        catch(...){
+            if(errno==0){ errno = ENOMEM; }
+            int rval = errno;
+            vinfo.volume->close(vinfo.volumeRelativeFileName, fd);
+
+            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+            return -rval;
+        }
+
+        fi->fh = fd;
+
+		return 0;
+    }
+    catch(...){
+        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+    }
+
+    try{
+         vinfo = this->getMaxFreeSpaceVolume(file);
+    }
+    catch(...){
+        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+        return -ENOSPC;
+    }
+
+	this->cloneParentDirsIntoVolume(vinfo.volume, vinfo.volumeRelativeFileName);
+
+    int fd = -1;
+	fd = vinfo.volume->open(vinfo.volumeRelativeFileName, fi->flags);
+
+	if (fd == -1) {
+		return -errno;
+	}
+
+	if (getuid() == 0) {
+		struct stat st;
+        gid_t gid;
+        uid_t uid;
+        this->determineCaller(&uid, &gid);
+		if (vinfo.volume->getattr(vinfo.volumeRelativeFileName, &st) == 0) {
+			// parent directory is SGID'ed
+			if (st.st_gid != getgid()) gid = st.st_gid;
+		}
+		vinfo.volume->chown(vinfo.volumeRelativeFileName, uid, gid);
+	}
+
+    try{
+        Synchronized syncOpenFiles(this->openFiles);
+
+        int *syncToken = NULL;
+        openFiles_set::index<of_idx_volumeFile>::type &idx = this->openFiles.get<of_idx_volumeFile>();
+        openFiles_set::index<of_idx_volumeFile>::type::iterator it = idx.find(vinfo.volumeRelativeFileName);
+        if(it!=idx.end()){
+            syncToken = it->syncToken;
+        }
+        else{
+            syncToken = new int;
+        }
+
+        struct openFile of = { vinfo.volumeRelativeFileName, vinfo.volume, fd, fi->flags, syncToken, true };
+        this->openFiles.insert(of);
+    }
+    catch(...){
+        if(errno==0){ errno = ENOMEM; }
+        int rval = errno;
+        vinfo.volume->close(vinfo.volumeRelativeFileName, fd);
+
+        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+        return -rval;
+    }
+
+    fi->fh = fd;
+
+    return 0;
+}
+
+int Fuse::op_release(const boost::filesystem::path path, struct fuse_file_info *fi){
+    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+    int fd = fi->fh;
+
+    try{
+        Synchronized syncOpenFiles(this->openFiles);
+
+        openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
+        openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
+        if(it==idx.end()){
+            throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "bad descriptor";
+        }
+
+        it->volume->close(path, fd);
+
+        int *syncToken = it->syncToken;
+        boost::filesystem::path volumeFile = it->volumeFile;
+        idx.erase(it);
+
+        openFiles_set::index<of_idx_volumeFile>::type &vidx = this->openFiles.get<of_idx_volumeFile>();
+        if(vidx.find(volumeFile)==vidx.end()){
+            delete syncToken;
+        }
+    }catch(...){
+        if(errno==0){ errno = EBADFD; }
+
+        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+        return -errno;
+    }
+
+	return 0;
+}
+
+int Fuse::op_read(const boost::filesystem::path file, char *buf, size_t count, off_t offset, struct fuse_file_info *fi)
+{
+    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+    if(buf==NULL){ return -EINVAL; }
+
+    int fd = fi->fh;
+    try{
+        Synchronized syncOpenFiles(this->openFiles);
+
+        openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
+        openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
+        if(it!=idx.end() && it->valid==false){
+            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__, "file descriptor has been invalidated internally");
+            errno = EINVAL;
+            return -errno;
+        }
+
+        Springy::Volume::IVolume *volume = it->volume;
+        ssize_t res;
+        res = volume->read(file, fd, buf, count, offset);
+        if (res == -1){
+            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+            return -errno;
+        }
+
+        return res;
+    }catch(...){
+        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+        errno = EBADFD;
+        return -errno;
+    }
+}
+
+int Fuse::op_write(const boost::filesystem::path file, const char *buf, size_t count, off_t offset, struct fuse_file_info *fi)
+{
+    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+    
+    if(this->readonly){ return -EROFS; }
+
+    if(buf==NULL){ return -EINVAL; }
+
+	ssize_t res;
+    int fd = fi->fh;
+
+    int *syncToken = NULL;
+    Springy::Volume::IVolume *volume;
+
+    try{
+        Synchronized syncOpenFiles(this->openFiles);
+
+        openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
+        openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
+        if(it!=idx.end() && it->valid==false){
+            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__, "file descriptor has been invalidated internally");
+            errno = EINVAL;
+            return -errno;
+        }
+        if(it==idx.end()){
+            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__, "file descriptor not found");
+            errno = EBADFD;
+            return -errno;
+        }
+
+        syncToken = it->syncToken;
+        volume = it->volume;
+    }catch(...){
+        if(errno==0){ errno = EBADFD; }
+        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__, "exception catched");
+        return -errno;
+    }
+
+    Synchronized sync(syncToken);
+
+    errno = 0;
+	res = volume->write(file, fd, buf, count, offset);
+	if ((res >= 0) || (res == -1 && errno != ENOSPC)) {
+		if (res == -1) {
+            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+			return -errno;
+		}
+		return res;
+	}
+
+    struct stat st;
+    volume->getattr(file, &st);
+
+    // write failed, cause of no space left
+    errno = ENOSPC;
+    try{
+        this->move_file(fd, file, volume, (off_t)(offset+count) > st.st_size ? offset+count : st.st_size);
+    }catch(...){
+        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__, "exception catched");
+        return -errno;
+    }
+
+    res = this->libc->pwrite(__LINE__, fd, buf, count, offset);
+    if (res == -1) {
+        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__, "write failed");
+        return -errno;
+    }
+
+    return res;
+}
+
+int Fuse::op_ftruncate(const boost::filesystem::path path, off_t size, struct fuse_file_info *fi){
+    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+    
+    if(this->readonly){ return -EROFS; }
+
+    int fd = fi->fh;
+    try{
+        Synchronized syncOpenFiles(this->openFiles);
+
+        openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
+        openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
+        if(it!=idx.end() && it->valid==false){
+            // MISSING: log that the descriptor has been invalidated as the reason of failing
+            errno = EINVAL;
+            return -errno;
+        }
+        if(it->volume->truncate(it->volumeFile, fd, size) == -1){
+            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+		    return -errno;
+        }
+        return 0;
+    }catch(...){}
+
+    errno = -EBADFD;
+    t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+    return -errno;
+}
+
+
+#if _POSIX_SYNCHRONIZED_IO + 0 > 0 || defined(__FreeBSD__)
+#undef HAVE_FDATASYNC
+#else
+#define HAVE_FDATASYNC 1
+#endif
+
+int Fuse::op_fsync(const boost::filesystem::path path, int isdatasync, struct fuse_file_info *fi){
+    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+    
+    if(this->readonly){ return -EROFS; }
+
+    int fd = fi->fh;
+    try{
+        Synchronized syncOpenFiles(this->openFiles);
+
+        openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
+        openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
+        if(it!=idx.end() && it->valid==false){
+            errno = EINVAL;
+            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+            return -errno;
+        }
+
+        int res = 0;
+
+#ifdef HAVE_FDATASYNC
+        if (isdatasync)
+            res = it->volume->fdatasync(path, fd);
+        else
+#endif
+            res = it->volume->fsync(path, fd);
+
+        if (res == -1)
+            return -errno;
+    }catch(...){
+        errno = EBADFD;
+        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+        return -errno;
+    }
+
+	return 0;
+}
+
+int Fuse::op_lock(const boost::filesystem::path path, struct fuse_file_info *fi, int cmd, struct flock *lck){
+    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+    int fd = fi->fh;
+    try{
+        Synchronized syncOpenFiles(this->openFiles);
+
+        openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
+        openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
+        if(it!=idx.end() && it->valid==false){
+            errno = EINVAL;
+            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+            return -errno;
+        }
+
+        int res = it->volume->lock(path, fd, cmd, lck, &fi->lock_owner);
+        if (res == -1)
+            return -errno;
+    }catch(...){
+        errno = EBADFD;
+        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+        return -errno;
+    }
+
+	return 0;
+}
+
+/////////////////// Path based operations ////////////////////////////////
+
+int Fuse::op_truncate(const boost::filesystem::path path, off_t size){
+    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+    
+    if(this->readonly){ return -EROFS; }
+
+    try{
+        Fuse::VolumeInfo vinfo = this->findVolume(path);
+        int res = vinfo.volume->truncate(vinfo.volumeRelativeFileName, -1, size);
+
+		if (res == -1){
+            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+			return -errno;
+        }
+		return 0;
+    }catch(...){
+        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+    }
+    errno = ENOENT;
+    return -errno;
+}
+
 int Fuse::op_getattr(const boost::filesystem::path file_name, struct stat *buf){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
@@ -824,338 +1223,6 @@ int Fuse::op_readlink(const boost::filesystem::path path, char *buf, size_t size
         t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
     }
 	return -ENOENT;
-}
-
-int Fuse::op_create(const boost::filesystem::path file, mode_t mode, struct fuse_file_info *fi){
-    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-    
-    if(this->readonly){ return -EROFS; }
-
-    try{
-        this->findVolume(file);
-        // file exists
-    }
-    catch(...){
-        Fuse::VolumeInfo vinfo;
-        try{
-             vinfo = this->getMaxFreeSpaceVolume(file);
-        }
-        catch(...){
-            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-            return -ENOSPC;
-        }
-
-        this->cloneParentDirsIntoVolume(vinfo.volume, vinfo.volumeRelativeFileName);
-
-        // file doesnt exist
-        int fd = vinfo.volume->creat(vinfo.volumeRelativeFileName, mode);
-        if(fd == -1){
-            return -errno;
-        }
-        try{
-            this->saveFd(vinfo.volumeRelativeFileName, vinfo.volume, fd, O_CREAT|O_WRONLY|O_TRUNC);
-            fi->fh = fd;
-        }
-        catch(...){
-            if(errno==0){ errno = ENOMEM; }
-            int rval = errno;
-            vinfo.volume->close(vinfo.volumeRelativeFileName, fd);
-
-            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-            return -rval;
-        }
-        return 0;
-    }
-
-    return this->op_open(file, fi);
-}
-
-int Fuse::op_open(const boost::filesystem::path file, struct fuse_file_info *fi){
-    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-    if(this->readonly && (fi->flags&O_RDONLY) != O_RDONLY){ return -EROFS; }
-
-    fi->fh = 0;
-    
-    Fuse::VolumeInfo vinfo;
-
-    try{
-        int fd = 0;
-        vinfo = this->findVolume(file);
-        fd = vinfo.volume->open(vinfo.volumeRelativeFileName, fi->flags);
-		if (fd == -1) {
-			return -errno;
-		}
-
-        try{
-            this->saveFd(vinfo.volumeRelativeFileName, vinfo.volume, fd, fi->flags);
-        }
-        catch(...){
-            if(errno==0){ errno = ENOMEM; }
-            int rval = errno;
-            vinfo.volume->close(vinfo.volumeRelativeFileName, fd);
-
-            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-            return -rval;
-        }
-
-        fi->fh = fd;
-
-		return 0;
-    }
-    catch(...){
-        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-    }
-
-    try{
-         vinfo = this->getMaxFreeSpaceVolume(file);
-    }
-    catch(...){
-        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-        return -ENOSPC;
-    }
-
-	this->cloneParentDirsIntoVolume(vinfo.volume, vinfo.volumeRelativeFileName);
-
-    int fd = -1;
-	fd = vinfo.volume->open(vinfo.volumeRelativeFileName, fi->flags);
-
-	if (fd == -1) {
-		return -errno;
-	}
-
-	if (getuid() == 0) {
-		struct stat st;
-        gid_t gid;
-        uid_t uid;
-        this->determineCaller(&uid, &gid);
-		if (vinfo.volume->getattr(vinfo.volumeRelativeFileName, &st) == 0) {
-			// parent directory is SGID'ed
-			if (st.st_gid != getgid()) gid = st.st_gid;
-		}
-		vinfo.volume->chown(vinfo.volumeRelativeFileName, uid, gid);
-	}
-
-    try{
-        Synchronized syncOpenFiles(this->openFiles);
-
-        int *syncToken = NULL;
-        openFiles_set::index<of_idx_volumeFile>::type &idx = this->openFiles.get<of_idx_volumeFile>();
-        openFiles_set::index<of_idx_volumeFile>::type::iterator it = idx.find(vinfo.volumeRelativeFileName);
-        if(it!=idx.end()){
-            syncToken = it->syncToken;
-        }
-        else{
-            syncToken = new int;
-        }
-
-        struct openFile of = { vinfo.volumeRelativeFileName, vinfo.volume, fd, fi->flags, syncToken, true };
-        this->openFiles.insert(of);
-    }
-    catch(...){
-        if(errno==0){ errno = ENOMEM; }
-        int rval = errno;
-        vinfo.volume->close(vinfo.volumeRelativeFileName, fd);
-
-        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-        return -rval;
-    }
-
-    fi->fh = fd;
-
-	return 0;
-}
-
-int Fuse::op_release(const boost::filesystem::path path, struct fuse_file_info *fi){
-    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-    int fd = fi->fh;
-
-    try{
-        Synchronized syncOpenFiles(this->openFiles);
-
-        openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
-        openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
-        if(it==idx.end()){
-            throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "bad descriptor";
-        }
-
-        it->volume->close(path, fd);
-
-        int *syncToken = it->syncToken;
-        boost::filesystem::path volumeFile = it->volumeFile;
-        idx.erase(it);
-
-        openFiles_set::index<of_idx_volumeFile>::type &vidx = this->openFiles.get<of_idx_volumeFile>();
-        if(vidx.find(volumeFile)==vidx.end()){
-            delete syncToken;
-        }
-    }catch(...){
-        if(errno==0){ errno = EBADFD; }
-
-        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-        return -errno;
-    }
-
-	return 0;
-}
-
-int Fuse::op_read(const boost::filesystem::path file, char *buf, size_t count, off_t offset, struct fuse_file_info *fi)
-{
-    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-    if(buf==NULL){ return -EINVAL; }
-
-    int fd = fi->fh;
-    try{
-        Synchronized syncOpenFiles(this->openFiles);
-
-        openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
-        openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
-        if(it!=idx.end() && it->valid==false){
-            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__, "file descriptor has been invalidated internally");
-            errno = EINVAL;
-            return -errno;
-        }
-
-        Springy::Volume::IVolume *volume = it->volume;
-        ssize_t res;
-        res = volume->read(file, fd, buf, count, offset);
-        if (res == -1){
-            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-            return -errno;
-        }
-
-        return res;
-    }catch(...){
-        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-        errno = EBADFD;
-        return -errno;
-    }
-}
-
-int Fuse::op_write(const boost::filesystem::path file, const char *buf, size_t count, off_t offset, struct fuse_file_info *fi)
-{
-    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-    
-    if(this->readonly){ return -EROFS; }
-
-    if(buf==NULL){ return -EINVAL; }
-
-	ssize_t res;
-    int fd = fi->fh;
-
-    int *syncToken = NULL;
-    Springy::Volume::IVolume *volume;
-
-    try{
-        Synchronized syncOpenFiles(this->openFiles);
-
-        openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
-        openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
-        if(it!=idx.end() && it->valid==false){
-            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__, "file descriptor has been invalidated internally");
-            errno = EINVAL;
-            return -errno;
-        }
-        if(it==idx.end()){
-            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__, "file descriptor not found");
-            errno = EBADFD;
-            return -errno;
-        }
-
-        syncToken = it->syncToken;
-        volume = it->volume;
-    }catch(...){
-        if(errno==0){ errno = EBADFD; }
-        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__, "exception catched");
-        return -errno;
-    }
-
-    Synchronized sync(syncToken);
-
-    errno = 0;
-	res = volume->write(file, fd, buf, count, offset);
-	if ((res >= 0) || (res == -1 && errno != ENOSPC)) {
-		if (res == -1) {
-            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-			return -errno;
-		}
-		return res;
-	}
-
-    struct stat st;
-    volume->getattr(file, &st);
-
-    // write failed, cause of no space left
-    errno = ENOSPC;
-    try{
-        this->move_file(fd, file, volume, (off_t)(offset+count) > st.st_size ? offset+count : st.st_size);
-    }catch(...){
-        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__, "exception catched");
-        return -errno;
-    }
-
-    res = this->libc->pwrite(__LINE__, fd, buf, count, offset);
-    if (res == -1) {
-        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__, "write failed");
-        return -errno;
-    }
-
-    return res;
-}
-
-int Fuse::op_truncate(const boost::filesystem::path path, off_t size){
-    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-    
-    if(this->readonly){ return -EROFS; }
-
-    try{
-        Fuse::VolumeInfo vinfo = this->findVolume(path);
-        int res = vinfo.volume->truncate(vinfo.volumeRelativeFileName, size);
-
-		if (res == -1){
-            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-			return -errno;
-        }
-		return 0;
-    }catch(...){
-        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-    }
-    errno = ENOENT;
-    return -errno;
-}
-int Fuse::op_ftruncate(const boost::filesystem::path path, off_t size, struct fuse_file_info *fi){
-    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-    
-    if(this->readonly){ return -EROFS; }
-
-    int fd = fi->fh;
-    try{
-        Synchronized syncOpenFiles(this->openFiles);
-
-        openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
-        openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
-        if(it!=idx.end() && it->valid==false){
-            // MISSING: log that the descriptor has been invalidated as the reason of failing
-            errno = EINVAL;
-            return -errno;
-        }
-        if(it->volume->truncate(it->volumeFile, size) == -1){
-            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-		    return -errno;
-        }
-        return 0;
-    }catch(...){}
-
-    errno = -EBADFD;
-    t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-    return -errno;
 }
 
 int Fuse::op_access(const boost::filesystem::path path, int mode){
@@ -1537,75 +1604,6 @@ int Fuse::op_mknod(const boost::filesystem::path path, mode_t mode, dev_t rdev){
 	return -errno;
 }
 
-#if _POSIX_SYNCHRONIZED_IO + 0 > 0 || defined(__FreeBSD__)
-#undef HAVE_FDATASYNC
-#else
-#define HAVE_FDATASYNC 1
-#endif
-
-int Fuse::op_fsync(const boost::filesystem::path path, int isdatasync, struct fuse_file_info *fi){
-    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-    
-    if(this->readonly){ return -EROFS; }
-
-    int fd = fi->fh;
-    try{
-        Synchronized syncOpenFiles(this->openFiles);
-
-        openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
-        openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
-        if(it!=idx.end() && it->valid==false){
-            errno = EINVAL;
-            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-            return -errno;
-        }
-
-        int res = 0;
-
-#ifdef HAVE_FDATASYNC
-        if (isdatasync)
-            res = it->volume->fdatasync(path, fd);
-        else
-#endif
-            res = it->volume->fsync(path, fd);
-
-        if (res == -1)
-            return -errno;
-    }catch(...){
-        errno = EBADFD;
-        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-        return -errno;
-    }
-
-	return 0;
-}
-
-int Fuse::op_lock(const boost::filesystem::path path, struct fuse_file_info *fi, int cmd, struct flock *lck){
-    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-    int fd = fi->fh;
-    try{
-        Synchronized syncOpenFiles(this->openFiles);
-
-        openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
-        openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
-        if(it!=idx.end() && it->valid==false){
-            errno = EINVAL;
-            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-            return -errno;
-        }
-
-        int res = it->volume->lock(path, fd, cmd, lck, &fi->lock_owner);
-        if (res == -1)
-            return -errno;
-    }catch(...){
-        errno = EBADFD;
-        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-        return -errno;
-    }
-
-	return 0;
-}
 
 //#ifndef WITHOUT_XATTR
 //int Fuse::op_setxattr(const boost::filesystem::path file_name, const std::string attrname,

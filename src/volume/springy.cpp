@@ -16,20 +16,43 @@ namespace Springy{
         std::string Springy::string(){ return this->u.string(); }
         bool Springy::isLocal(){ return false; }
         
-        std::string Springy::sendRequest(std::string host, int port, std::string path, std::string &params){
-            std::string response;
-            return response;
+        nlohmann::json Springy::sendRequest(std::string host, int port, std::string path, nlohmann::json jparams){
+            std::string params = jparams.dump();
+            
+            std::string response = "{errno: -1}";
+
+            return nlohmann::json::parse(response);
+        }
+        
+        struct stat Springy::readStatFromJson(nlohmann::json j){
+            struct stat st;
+
+            st.st_dev     = j["st_dev"];
+            st.st_ino     = j["st_ino"];
+            st.st_mode    = j["st_mode"];
+            st.st_nlink   = j["st_nlink"];
+            st.st_uid     = j["st_uid"];
+            st.st_gid     = j["st_gid"];
+            st.st_rdev    = j["st_rdev"];
+            st.st_size    = j["st_size"];
+            st.st_blksize = j["st_blksize"];
+            st.st_blocks  = j["st_blocks"];
+            st.st_atime   = j["st_atime"];
+            st.st_mtime   = j["st_mtime"];
+            st.st_ctime   = j["st_ctime"];
+
+            return st;
         }
 
         int Springy::getattr(boost::filesystem::path v_file_name, struct stat *buf){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+            
+            boost::filesystem::path p = this->concatPath(this->u.path(), v_file_name);
 
             nlohmann::json j;
-            j["path"] = v_file_name.string();
-            std::string requestData = j.dump();
-            std::string response = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/getattr", requestData);
-            j = nlohmann::json::parse(response);
-            
+            j["path"] = p.string();
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/getattr", j);
+
             int err = j["errno"];
             err = err < 0 ? -err : err;
 
@@ -38,31 +61,19 @@ namespace Springy{
                 return -1;
             }
             else{
-                buf->st_dev     = j["st_dev"];
-                buf->st_ino     = j["st_ino"];
-                buf->st_mode    = j["st_mode"];
-                buf->st_nlink   = j["st_nlink"];
-                buf->st_uid     = j["st_uid"];
-                buf->st_gid     = j["st_gid"];
-                buf->st_rdev    = j["st_rdev"];
-                buf->st_size    = j["st_size"];
-                buf->st_blksize = j["st_blksize"];
-                buf->st_blocks  = j["st_blocks"];
-                buf->st_atime   = j["st_atime"];
-                buf->st_mtime   = j["st_mtime"];
-                buf->st_ctime   = j["st_ctime"];
+                *buf = this->readStatFromJson(j);
 
                 return 0;
             }
         }
         int Springy::statvfs(boost::filesystem::path v_path, struct ::statvfs *stat){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+            
+            boost::filesystem::path p = this->concatPath(this->u.path(), v_path);
 
             nlohmann::json j;
-            j["path"] = v_path.string();
-            std::string requestData = j.dump();
-            std::string response = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/statfs", requestData);
-            j = nlohmann::json::parse(response);
+            j["path"] = p.string();
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/statfs", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -91,14 +102,14 @@ namespace Springy{
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
             if(this->readonly){ errno = EROFS; return -1; }
+            
+            boost::filesystem::path p = this->concatPath(this->u.path(), v_file_name);
 
             nlohmann::json j;
-            j["path"] = v_file_name.string();
+            j["path"] = p.string();
             j["owner"] = owner;
             j["group"] = group;
-            std::string requestData = j.dump();
-            std::string response = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/chown", requestData);
-            j = nlohmann::json::parse(response);
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/chown", j);
             
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -114,13 +125,14 @@ namespace Springy{
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
             if(this->readonly){ errno = EROFS; return -1; }
+            
+            boost::filesystem::path p = this->concatPath(this->u.path(), v_file_name);
 
             nlohmann::json j;
-            j["path"] = v_file_name.string();
+            j["path"] = p.string();
             j["mode"] = mode;
             std::string requestData = j.dump();
-            std::string response = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/chmod", requestData);
-            j = nlohmann::json::parse(response);
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/chmod", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -135,13 +147,13 @@ namespace Springy{
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             
             if(this->readonly){ errno = EROFS; return -1; }
+            
+            boost::filesystem::path p = this->concatPath(this->u.path(), v_file_name);
 
             nlohmann::json j;
-            j["path"] = v_file_name.string();
+            j["path"] = p.string();
             j["mode"] = mode;
-            std::string requestData = j.dump();
-            std::string response = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/mkdir", requestData);
-            j = nlohmann::json::parse(response);
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/mkdir", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -154,14 +166,14 @@ namespace Springy{
         }
         int Springy::rmdir(boost::filesystem::path v_path){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-            
+
             if(this->readonly){ errno = EROFS; return -1; }
 
+            boost::filesystem::path p = this->concatPath(this->u.path(), v_path);
+
             nlohmann::json j;
-            j["path"] = v_path.string();
-            std::string requestData = j.dump();
-            std::string response = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/rmdir", requestData);
-            j = nlohmann::json::parse(response);
+            j["path"] = p.string();
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/rmdir", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -179,11 +191,9 @@ namespace Springy{
             if(this->readonly){ errno = EROFS; return -1; }
 
             nlohmann::json j;
-            j["old"] = v_old_name.string();
-            j["new"] = v_new_name.string();
-            std::string requestData = j.dump();
-            std::string response = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/rename", requestData);
-            j = nlohmann::json::parse(response);
+            j["old"] = this->concatPath(this->u.path(), v_old_name);
+            j["new"] = this->concatPath(this->u.path(), v_new_name);
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/rename", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -198,8 +208,25 @@ namespace Springy{
         int Springy::utimensat(boost::filesystem::path v_path, const struct timespec times[2]){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
+            if(this->readonly){ errno = EROFS; return -1; }
+            
             boost::filesystem::path p = this->concatPath(this->u.path(), v_path);
-            return this->libc->utimensat(__LINE__, AT_FDCWD, p.c_str(), times, AT_SYMLINK_NOFOLLOW);
+
+            nlohmann::json j;
+            j["path"] = p.string();
+            j["times"] = nlohmann::json::array();
+            j["times"][0] = {{"tv_sec", times[0].tv_sec}, {"tv_nsec", times[0].tv_nsec}};
+            j["times"][1] = {{"tv_sec", times[1].tv_sec}, {"tv_nsec", times[1].tv_nsec}};
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/utimensat", j);
+
+            int err = j["errno"];
+            err = err < 0 ? -err : err;
+
+            if(err != 0){
+                errno = err;
+                return -1;
+            }
+            return 0;
         }
 
         int Springy::readdir(boost::filesystem::path v_path, std::unordered_map<std::string, struct stat> &result){
@@ -207,24 +234,26 @@ namespace Springy{
 
             boost::filesystem::path p = this->concatPath(this->u.path(), v_path);
 
-            struct dirent *de;
-            DIR * dh = this->libc->opendir(__LINE__, p.c_str());
-            if (!dh){
-                return errno;
+            nlohmann::json j;
+            j["path"] = p.string();
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/readdir", j);
+
+            int err = j["errno"];
+            err = err < 0 ? -err : err;
+
+            if(err != 0){
+                errno = err;
+                return -1;
             }
 
-            while((de = this->libc->readdir(__LINE__, dh))) {
-                // find dups
-                if(result.find(de->d_name)!=result.end()){
-                    continue;
-                }
-
-                struct ::stat st;
-                this->libc->lstat(__LINE__, (p/de->d_name).c_str(), &st);
-                result.insert(std::make_pair(de->d_name, st));
+            // iterate the array
+            nlohmann::json directories = j["diectories"];
+            for (nlohmann::json::iterator it = directories.begin(); it != directories.end(); ++it) {
+                nlohmann::json entry = *it;
+                std::string spath = entry["path"];
+                result.insert(std::make_pair(spath, this->readStatFromJson(entry)));
             }
 
-            this->libc->closedir(__LINE__, dh);
             return 0;
         }
         
@@ -232,51 +261,28 @@ namespace Springy{
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
             boost::filesystem::path p = this->concatPath(this->u.path(), v_path);
-            return this->libc->readlink(__LINE__, p.c_str(), buf, bufsiz);
-        }
 
-        int Springy::open(boost::filesystem::path v_file_name, int flags, mode_t mode){
-            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+            nlohmann::json j;
+            j["path"] = p.string();
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/readlink", j);
 
-            if(this->readonly && (flags&O_RDONLY) != O_RDONLY){ errno = EROFS; return -1; }
+            int err = j["errno"];
+            err = err < 0 ? -err : err;
 
-            boost::filesystem::path p = this->concatPath(this->u.path(), v_file_name);
-            if(mode != 0){
-                return this->libc->open(__LINE__, p.c_str(), flags);
+            if(err != 0){
+                errno = err;
+                return -1;
             }
-            else{
-                return this->libc->open(__LINE__, p.c_str(), flags, mode);
+
+            std::string link = j["link"];
+            if(link.size() < bufsiz){
+                bufsiz = link.size();
             }
-        }
-        int Springy::creat(boost::filesystem::path v_file_name, mode_t mode){
-            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-            
-            if(this->readonly){ errno = EROFS; return -1; }
+            memcpy(buf, link.c_str(), bufsiz);            
 
-            boost::filesystem::path p = this->concatPath(this->u.path(), v_file_name);
-            return this->libc->creat(__LINE__, p.c_str(), mode);
-        }
-        int Springy::close(boost::filesystem::path v_file_name, int fd){
-            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-            boost::filesystem::path p = this->concatPath(this->u.path(), v_file_name);
-            return this->libc->close(__LINE__, fd);
-        }
-        
-        ssize_t Springy::pread(boost::filesystem::path v_file_name, int fd, void *buf, size_t count, off_t offset){
-            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-            return this->libc->pread(__LINE__, fd, buf, count, offset);
+            return bufsiz;
         }
 
-        int Springy::truncate(boost::filesystem::path v_path, off_t length){
-            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-            
-            if(this->readonly){ errno = EROFS; return -1; }
-
-            boost::filesystem::path p = this->concatPath(this->u.path(), v_path);
-            return this->libc->truncate(__LINE__, p.c_str(), length);
-        }
-        
         int Springy::access(boost::filesystem::path v_path, int mode){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             
@@ -330,6 +336,51 @@ namespace Springy{
             return this->libc->mknod(__LINE__, p.c_str(), mode, dev);
         }
 
+
+        // descriptor based operations
+
+        int Springy::open(boost::filesystem::path v_file_name, int flags, mode_t mode){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+            if(this->readonly && (flags&O_RDONLY) != O_RDONLY){ errno = EROFS; return -1; }
+
+            boost::filesystem::path p = this->concatPath(this->u.path(), v_file_name);
+            if(mode != 0){
+                return this->libc->open(__LINE__, p.c_str(), flags);
+            }
+            else{
+                return this->libc->open(__LINE__, p.c_str(), flags, mode);
+            }
+        }
+        int Springy::creat(boost::filesystem::path v_file_name, mode_t mode){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+            
+            if(this->readonly){ errno = EROFS; return -1; }
+
+            boost::filesystem::path p = this->concatPath(this->u.path(), v_file_name);
+            return this->libc->creat(__LINE__, p.c_str(), mode);
+        }
+        int Springy::close(boost::filesystem::path v_file_name, int fd){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+            boost::filesystem::path p = this->concatPath(this->u.path(), v_file_name);
+            return this->libc->close(__LINE__, fd);
+        }
+        
+        ssize_t Springy::pread(boost::filesystem::path v_file_name, int fd, void *buf, size_t count, off_t offset){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+            return this->libc->pread(__LINE__, fd, buf, count, offset);
+        }
+
+        int Springy::truncate(boost::filesystem::path v_path, int fd, off_t length){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+            
+            if(this->readonly){ errno = EROFS; return -1; }
+
+            boost::filesystem::path p = this->concatPath(this->u.path(), v_path);
+            return this->libc->truncate(__LINE__, p.c_str(), length);
+        }
+
         int Springy::fsync(boost::filesystem::path v_path, int fd){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             
@@ -339,17 +390,30 @@ namespace Springy{
         }
         int Springy::fdatasync(boost::filesystem::path v_path, int fd){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-            
+
             if(this->readonly){ errno = EROFS; return -1; }
 
             return this->libc->fdatasync(__LINE__, fd);
         }
-        
+
         int Springy::lock(boost::filesystem::path v_path, int fd, int cmd, struct ::flock *lck, const uint64_t *lock_owner){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
             //return ulockmgr_op(fd, cmd, lck, lock_owner, (size_t)sizeof(*lock_owner));
             return 0;
         }
+        
+        
+        boost::filesystem::path Springy::concatPath(const boost::filesystem::path &p1, const boost::filesystem::path &p2){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+            boost::filesystem::path p = boost::filesystem::path(p1/p2);
+            while(p.string().back() == '/'){
+                p = p.parent_path();
+            }
+
+            return p;
+        }
+
     }
 }
