@@ -287,9 +287,23 @@ namespace Springy{
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             
             if(this->readonly && (mode&F_OK) != F_OK && (mode&R_OK) != R_OK){ errno = EROFS; return -1; }
-
+            
             boost::filesystem::path p = this->concatPath(this->u.path(), v_path);
-            return this->libc->access(__LINE__, p.c_str(), mode);
+
+            nlohmann::json j;
+            j["path"] = p.string();
+            j["mode"] = mode;
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/access", j);
+
+            int err = j["errno"];
+            err = err < 0 ? -err : err;
+
+            if(err != 0){
+                errno = err;
+                return -1;
+            }
+            
+            return 0;
         }
 
         int Springy::unlink(boost::filesystem::path v_path){
@@ -298,7 +312,20 @@ namespace Springy{
             if(this->readonly){ errno = EROFS; return -1; }
 
             boost::filesystem::path p = this->concatPath(this->u.path(), v_path);
-            return this->libc->unlink(__LINE__, p.c_str());
+
+            nlohmann::json j;
+            j["path"] = p.string();
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/unlink", j);
+
+            int err = j["errno"];
+            err = err < 0 ? -err : err;
+
+            if(err != 0){
+                errno = err;
+                return -1;
+            }
+            
+            return 0;
         }
         
         int Springy::link(boost::filesystem::path oldpath, const boost::filesystem::path newpath){
@@ -306,18 +333,38 @@ namespace Springy{
             
             if(this->readonly){ errno = EROFS; return -1; }
 
-            boost::filesystem::path oldp = this->concatPath(this->u.path(), oldpath);
-            boost::filesystem::path newp = this->concatPath(this->u.path(), newpath);
-            return this->libc->link(__LINE__, oldp.c_str(), newp.c_str());
+            nlohmann::json j;
+            j["oldpath"] = this->concatPath(this->u.path(), oldpath);
+            j["newpath"] = this->concatPath(this->u.path(), newpath);
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/link", j);
+
+            int err = j["errno"];
+            err = err < 0 ? -err : err;
+
+            if(err != 0){
+                errno = err;
+                return -1;
+            }
+            return 0;
         }
         int Springy::symlink(boost::filesystem::path oldpath, const boost::filesystem::path newpath){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             
             if(this->readonly){ errno = EROFS; return -1; }
 
-            boost::filesystem::path oldp = this->concatPath(this->u.path(), oldpath);
-            boost::filesystem::path newp = this->concatPath(this->u.path(), newpath);
-            return this->libc->symlink(__LINE__, oldp.c_str(), newp.c_str());
+            nlohmann::json j;
+            j["oldpath"] = this->concatPath(this->u.path(), oldpath);
+            j["newpath"] = this->concatPath(this->u.path(), newpath);
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/symlink", j);
+
+            int err = j["errno"];
+            err = err < 0 ? -err : err;
+
+            if(err != 0){
+                errno = err;
+                return -1;
+            }
+            return 0;
         }
         int Springy::mkfifo(boost::filesystem::path v_path, mode_t mode){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
@@ -325,7 +372,21 @@ namespace Springy{
             if(this->readonly){ errno = EROFS; return -1; }
 
             boost::filesystem::path p = this->concatPath(this->u.path(), v_path);
-            return this->libc->mkfifo(__LINE__, p.c_str(), mode);
+
+            nlohmann::json j;
+            j["path"] = p.string();
+            j["mode"] = mode;
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/mkfifo", j);
+
+            int err = j["errno"];
+            err = err < 0 ? -err : err;
+
+            if(err != 0){
+                errno = err;
+                return -1;
+            }
+            
+            return 0;
         }
         int Springy::mknod(boost::filesystem::path v_path, mode_t mode, dev_t dev){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
@@ -333,7 +394,22 @@ namespace Springy{
             if(this->readonly){ errno = EROFS; return -1; }
 
             boost::filesystem::path p = this->concatPath(this->u.path(), v_path);
-            return this->libc->mknod(__LINE__, p.c_str(), mode, dev);
+
+            nlohmann::json j;
+            j["path"] = p.string();
+            j["mode"] = mode;
+            j["dev"] = dev;
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/mknod", j);
+
+            int err = j["errno"];
+            err = err < 0 ? -err : err;
+
+            if(err != 0){
+                errno = err;
+                return -1;
+            }
+            
+            return 0;
         }
 
 
