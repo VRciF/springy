@@ -1,4 +1,3 @@
-#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -10,7 +9,6 @@
 #include <time.h>
 #include <errno.h>
 #include <limits.h>
-#include <stdexcept>
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/lexical_cast.hpp>
@@ -43,24 +41,24 @@ void Httpd::start(){
     //snprintf(serveraddr, sizeof(serveraddr)-1, "0.0.0.0:%d", server_port);
     snprintf(serveraddr, sizeof(serveraddr)-1, "%d", server_port);
 
-    ns_mgr_init(&this->data.mgr, NULL);
-    ns_bind_opts opts;
+    mg_mgr_init(&this->data.mgr, NULL);
+    mg_bind_opts opts;
     memset(&opts, '\0', sizeof(opts));
     opts.user_data = (void*)this;
-    this->data.serverSocket = ns_bind_opt(&this->data.mgr, serveraddr, Httpd::ev_handler, opts);
+    this->data.serverSocket = mg_bind_opt(&this->data.mgr, serveraddr, Httpd::ev_handler, opts);
     if(this->data.serverSocket==NULL){
-        ns_mgr_free(&this->data.mgr);
+        mg_mgr_free(&this->data.mgr);
         throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "binding to port failed: " << serveraddr;
     }
-    ns_set_protocol_http_websocket(this->data.serverSocket);
+    mg_set_protocol_http_websocket(this->data.serverSocket);
 
     this->data.s_http_server_opts.document_root = NULL;
 
 #ifdef NS_ENABLE_SSL
     if(mhdd->server_cert_pem!=NULL){
-      const char *err_str = ns_set_ssl(nc, ssl_cert, NULL);
+      const char *err_str = mg_set_ssl(nc, ssl_cert, NULL);
       if (err_str != NULL) {
-        ns_mgr_free(&this->data.mgr);
+        mg_mgr_free(&this->data.mgr);
         throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "Error loading SSL cert: " << err_str;
       }
     }
@@ -74,7 +72,7 @@ void Httpd::start(){
     */
 
     if(pthread_create(&this->data.thHttpServer, NULL, Httpd::server, this)!=0) {
-        ns_mgr_free(&this->data.mgr);
+        mg_mgr_free(&this->data.mgr);
         throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "creating server thread failed";
     }
 
@@ -97,7 +95,7 @@ Httpd::~Httpd(){
 
 
 
-void Httpd::handle_directory(int what, struct ns_connection *nc, struct http_message *hm){
+void Httpd::handle_directory(int what, struct mg_connection *nc, struct http_message *hm){
     std::string contentType("application/json");
   char directory[8192] = {'\0'};
   char vmountpoint[8192] = {'\0'};
@@ -105,14 +103,14 @@ void Httpd::handle_directory(int what, struct ns_connection *nc, struct http_mes
 
   std::stringstream ss;
   
-  struct ns_str *acrh = ns_get_http_header(hm, "Access-Control-Request-Headers");
+  struct mg_str *acrh = mg_get_http_header(hm, "Access-Control-Request-Headers");
   std::string accessControlRequestHeader;
   if(acrh){ accessControlRequestHeader=std::string(acrh->p, acrh->len); }
 
   /* Get form variables */
   do{
-      ns_get_http_var(&hm->query_string, "callback", callback, sizeof(callback));
-      ns_get_http_var(&hm->query_string, "vmountpoint", vmountpoint, sizeof(vmountpoint));
+      mg_get_http_var(&hm->query_string, "callback", callback, sizeof(callback));
+      mg_get_http_var(&hm->query_string, "vmountpoint", vmountpoint, sizeof(vmountpoint));
       if(strlen(vmountpoint)<=0){
           vmountpoint[0] = '/';
       }
@@ -121,7 +119,7 @@ void Httpd::handle_directory(int what, struct ns_connection *nc, struct http_mes
           break;
       }
 
-      if(ns_get_http_var(&hm->query_string, "directory", directory, sizeof(directory))<=0){
+      if(mg_get_http_var(&hm->query_string, "directory", directory, sizeof(directory))<=0){
           ss << "{success: false, message: \"invalid (length) directory parameter given\", data: null}";
           break;
       }
@@ -172,32 +170,32 @@ void Httpd::handle_directory(int what, struct ns_connection *nc, struct http_mes
   }
 
   /* Send headers */
-  ns_printf(nc, "HTTP/1.1 200 OK\r\n");
-  ns_printf(nc, "Content-Length: %d\r\n", response.length());
-  ns_printf(nc, "Content-Type: %s\r\n", contentType.c_str());
-  ns_printf(nc, "Access-Control-Allow-Origin: *\r\n");
-  ns_printf(nc, "Access-Control-Allow-Methods: POST, GET, OPTIONS, HEAD, PUT, DELETE\r\n");
+  mg_printf(nc, "HTTP/1.1 200 OK\r\n");
+  mg_printf(nc, "Content-Length: %lu\r\n", response.length());
+  mg_printf(nc, "Content-Type: %s\r\n", contentType.c_str());
+  mg_printf(nc, "Access-Control-Allow-Origin: *\r\n");
+  mg_printf(nc, "Access-Control-Allow-Methods: POST, GET, OPTIONS, HEAD, PUT, DELETE\r\n");
   if(accessControlRequestHeader.length()>0){
-      ns_printf(nc, "Access-Control-Allow-Headers: %s\r\n", accessControlRequestHeader.c_str());
+      mg_printf(nc, "Access-Control-Allow-Headers: %s\r\n", accessControlRequestHeader.c_str());
   }
-  ns_printf(nc, "Access-Control-Max-Age: 1728000\r\n");
-  ns_printf(nc, "Transfer-Encoding: chunked\r\n\r\n");
+  mg_printf(nc, "Access-Control-Max-Age: 1728000\r\n");
+  mg_printf(nc, "Transfer-Encoding: chunked\r\n\r\n");
 
-  ns_printf_http_chunk(nc, response.c_str());
+  mg_printf_http_chunk(nc, response.c_str());
 
-  ns_send_http_chunk(nc, "", 0);  /* Send empty chunk, the end of response */
+  mg_send_http_chunk(nc, "", 0);  /* Send empty chunk, the end of response */
 }
-void Httpd::list_directory(struct ns_connection *nc, struct http_message *hm){
+void Httpd::list_directory(struct mg_connection *nc, struct http_message *hm){
     std::string contentType("application/json");
     char callback[256]   = {'\0'};
 
-    struct ns_str *acrh = ns_get_http_header(hm, "Access-Control-Request-Headers");
+    struct mg_str *acrh = mg_get_http_header(hm, "Access-Control-Request-Headers");
     std::string accessControlRequestHeader;
     if(acrh){ accessControlRequestHeader=std::string(acrh->p, acrh->len); }
 
     /* Get form variables */
 
-    ns_get_http_var(&hm->query_string, "callback", callback, sizeof(callback));
+    mg_get_http_var(&hm->query_string, "callback", callback, sizeof(callback));
 
     errno = 0;
 
@@ -222,33 +220,33 @@ void Httpd::list_directory(struct ns_connection *nc, struct http_message *hm){
     }
 
     /* Send headers */
-    ns_printf(nc, "HTTP/1.1 200 OK\r\n");
-    ns_printf(nc, "Content-Length: %d\r\n", response.length());
-    ns_printf(nc, "Content-Type: %s\r\n", contentType.c_str());
-    ns_printf(nc, "Access-Control-Allow-Origin: *\r\n");
-    ns_printf(nc, "Access-Control-Allow-Methods: POST, GET, OPTIONS, HEAD, PUT, DELETE\r\n");
+    mg_printf(nc, "HTTP/1.1 200 OK\r\n");
+    mg_printf(nc, "Content-Length: %lu\r\n", response.length());
+    mg_printf(nc, "Content-Type: %s\r\n", contentType.c_str());
+    mg_printf(nc, "Access-Control-Allow-Origin: *\r\n");
+    mg_printf(nc, "Access-Control-Allow-Methods: POST, GET, OPTIONS, HEAD, PUT, DELETE\r\n");
     if(accessControlRequestHeader.length()>0){
-        ns_printf(nc, "Access-Control-Allow-Headers: %s\r\n", accessControlRequestHeader.c_str());
+        mg_printf(nc, "Access-Control-Allow-Headers: %s\r\n", accessControlRequestHeader.c_str());
     }
-    ns_printf(nc, "Access-Control-Max-Age: 1728000\r\n");
-    ns_printf(nc, "Transfer-Encoding: chunked\r\n\r\n");
+    mg_printf(nc, "Access-Control-Max-Age: 1728000\r\n");
+    mg_printf(nc, "Transfer-Encoding: chunked\r\n\r\n");
 
-    ns_printf_http_chunk(nc, response.c_str());
+    mg_printf_http_chunk(nc, response.c_str());
 
-    ns_send_http_chunk(nc, "", 0);  /* Send empty chunk, the end of response */
+    mg_send_http_chunk(nc, "", 0);  /* Send empty chunk, the end of response */
 }
 
-void Httpd::handle_invalid_request(struct ns_connection *nc, struct http_message *hm){
+void Httpd::handle_invalid_request(struct mg_connection *nc, struct http_message *hm){
     std::string contentType("application/json");
     char callback[256]   = {'\0'};
 
-    struct ns_str *acrh = ns_get_http_header(hm, "Access-Control-Request-Headers");
+    struct mg_str *acrh = mg_get_http_header(hm, "Access-Control-Request-Headers");
     std::string accessControlRequestHeader;
     if(acrh){ accessControlRequestHeader=std::string(acrh->p, acrh->len); }
 
     /* Get form variables */
 
-    ns_get_http_var(&hm->query_string, "callback", callback, sizeof(callback));
+    mg_get_http_var(&hm->query_string, "callback", callback, sizeof(callback));
 
     std::stringstream ss;
 
@@ -261,37 +259,37 @@ void Httpd::handle_invalid_request(struct ns_connection *nc, struct http_message
     }
 
     /* Send headers */
-    ns_printf(nc, "HTTP/1.1 200 OK\r\n");
-    ns_printf(nc, "Content-Length: %d\r\n", response.length());
-    ns_printf(nc, "Content-Type: %s\r\n", contentType.c_str());
-    ns_printf(nc, "Access-Control-Allow-Origin: *\r\n");
-    ns_printf(nc, "Access-Control-Allow-Methods: POST, GET, OPTIONS, HEAD, PUT, DELETE\r\n");
+    mg_printf(nc, "HTTP/1.1 200 OK\r\n");
+    mg_printf(nc, "Content-Length: %lu\r\n", response.length());
+    mg_printf(nc, "Content-Type: %s\r\n", contentType.c_str());
+    mg_printf(nc, "Access-Control-Allow-Origin: *\r\n");
+    mg_printf(nc, "Access-Control-Allow-Methods: POST, GET, OPTIONS, HEAD, PUT, DELETE\r\n");
     if(accessControlRequestHeader.length()>0){
-        ns_printf(nc, "Access-Control-Allow-Headers: %s\r\n", accessControlRequestHeader.c_str());
+        mg_printf(nc, "Access-Control-Allow-Headers: %s\r\n", accessControlRequestHeader.c_str());
     }
-    ns_printf(nc, "Access-Control-Max-Age: 1728000\r\n");
-    ns_printf(nc, "Transfer-Encoding: chunked\r\n\r\n");
+    mg_printf(nc, "Access-Control-Max-Age: 1728000\r\n");
+    mg_printf(nc, "Transfer-Encoding: chunked\r\n\r\n");
 
-    ns_printf_http_chunk(nc, response.c_str());
+    mg_printf_http_chunk(nc, response.c_str());
 
-    ns_send_http_chunk(nc, "", 0);  /* Send empty chunk, the end of response */
+    mg_send_http_chunk(nc, "", 0);  /* Send empty chunk, the end of response */
 }
 
-void Httpd::ev_handler(struct ns_connection *nc, int ev, void *ev_data) {
+void Httpd::ev_handler(struct mg_connection *nc, int ev, void *ev_data) {
     Httpd *instance = (Httpd*)nc->user_data;
     struct http_message *hm = (struct http_message *) ev_data;
 
     switch (ev) {
-      case NS_HTTP_REQUEST:
-        if (ns_vcmp(&hm->uri, "/api/addDirectory") == 0) {
+      case MG_EV_HTTP_REQUEST:
+        if (mg_vcmp(&hm->uri, "/api/addDirectory") == 0) {
             instance->handle_directory(1, nc, hm);
-        } else if (ns_vcmp(&hm->uri, "/api/remDirectory") == 0) {
+        } else if (mg_vcmp(&hm->uri, "/api/remDirectory") == 0) {
             instance->handle_directory(0, nc, hm);
-        } else if (ns_vcmp(&hm->uri, "/api/listDirectory") == 0) {
+        } else if (mg_vcmp(&hm->uri, "/api/listDirectory") == 0) {
             instance->list_directory(nc, hm);
         } else {
             instance->handle_invalid_request(nc, hm);
-          //ns_serve_http(nc, hm, instance->data.s_http_server_opts);
+          //mg_serve_http(nc, hm, instance->data.s_http_server_opts);
         }
         break;
       default:
@@ -326,7 +324,7 @@ void* Httpd::server(void *arg)
 */
 
     while(true) {
-        ns_mgr_poll(&instance->data.mgr, 500);
+        mg_mgr_poll(&instance->data.mgr, 500);
 
         {
             Synchronized sync(instance->data.shall_run, Synchronized::LockType::READ);
@@ -336,7 +334,7 @@ void* Httpd::server(void *arg)
         }
     }
 
-    ns_mgr_free(&instance->data.mgr);
+    mg_mgr_free(&instance->data.mgr);
 
     return NULL;
 }

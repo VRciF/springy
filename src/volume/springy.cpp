@@ -385,7 +385,7 @@ namespace Springy{
                 errno = err;
                 return -1;
             }
-            
+
             return 0;
         }
         int Springy::mknod(boost::filesystem::path v_path, mode_t mode, dev_t dev){
@@ -411,7 +411,6 @@ namespace Springy{
             
             return 0;
         }
-
 
         // descriptor based operations
 

@@ -12,11 +12,14 @@ endif
 
 TARGET := springy
 
-$(TARGET): $(OBJ)
-	$(CXX) $(CPPFLAGS) src/fossa.c $(OBJ) $(LDFLAGS) -o $@
+$(TARGET): $(OBJ) obj/mongose.o
+	$(CXX) $(CPPFLAGS) obj/mongoose.o $(OBJ) $(LDFLAGS) -o $@
 
 obj/%.o: src/%.cpp
 	$(CXX) $(CPPFLAGS) -nostdlib $(CXXFLAGS) -o $@ -c $<
+
+obj/mongose.o:
+	$(CC) -o obj/mongoose.o -c src/mongoose.c
 
 clean:
 	find obj -name *.o -exec rm {} \;
