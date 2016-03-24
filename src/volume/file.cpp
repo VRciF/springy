@@ -237,14 +237,6 @@ namespace Springy{
 
             return this->libc->fsync(__LINE__, fd);
         }
-        int File::fdatasync(boost::filesystem::path v_path, int fd){
-            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-            
-            if(this->readonly){ errno = EROFS; return -1; }
-
-            return this->libc->fdatasync(__LINE__, fd);
-        }
-        
         int File::lock(boost::filesystem::path v_path, int fd, int cmd, struct ::flock *lck, const uint64_t *lock_owner){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 

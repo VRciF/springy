@@ -47,7 +47,8 @@ namespace Springy{
                 virtual int creat(boost::filesystem::path v_file_name, mode_t mode);
                 virtual int close(boost::filesystem::path v_file_name, int fd);
 
-                virtual ssize_t pread(boost::filesystem::path v_file_name, int fd, void *buf, size_t count, off_t offset);
+                virtual ssize_t write(boost::filesystem::path v_file_name, int fd, const void *buf, size_t count, off_t offset);
+                virtual ssize_t read(boost::filesystem::path v_file_name, int fd, void *buf, size_t count, off_t offset);
 
                 virtual int truncate(boost::filesystem::path v_path, int fd, off_t length);
 
@@ -60,7 +61,6 @@ namespace Springy{
                 virtual int mknod(boost::filesystem::path v_path, mode_t mode, dev_t dev);
 
                 virtual int fsync(boost::filesystem::path v_path, int fd);
-                virtual int fdatasync(boost::filesystem::path v_path, int fd);
 
                 virtual int lock(boost::filesystem::path v_path, int fd, int cmd, struct ::flock *lck, const uint64_t *lock_owner);
         };

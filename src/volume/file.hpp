@@ -56,7 +56,6 @@ namespace Springy{
                 virtual int mknod(boost::filesystem::path v_path, mode_t mode, dev_t dev);
 
                 virtual int fsync(boost::filesystem::path v_path, int fd);
-                virtual int fdatasync(boost::filesystem::path v_path, int fd);
 
                 virtual int lock(boost::filesystem::path v_path, int fd, int cmd, struct ::flock *lck, const uint64_t *lock_owner);
         };

@@ -68,7 +68,6 @@ namespace Springy{
                 virtual int truncate(boost::filesystem::path v_path, int fd, off_t length) = 0;
 
                 virtual int fsync(boost::filesystem::path v_path, int fd) = 0;
-                virtual int fdatasync(boost::filesystem::path v_path, int fd) = 0;
                 
                 virtual int lock(boost::filesystem::path v_path, int fd, int cmd, struct ::flock *lck, const uint64_t *lock_owner) = 0;
         };

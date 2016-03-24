@@ -12,9 +12,12 @@
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/lexical_cast.hpp>
+#include <boost/filesystem.hpp>
 
 #include "httpd.hpp"
 #include "exception.hpp"
+
+#include "util/json.hpp"
 
 namespace Springy{
 
@@ -191,7 +194,7 @@ void Httpd::list_directory(struct mg_connection *nc, struct http_message *hm){
 
     struct mg_str *acrh = mg_get_http_header(hm, "Access-Control-Request-Headers");
     std::string accessControlRequestHeader;
-    if(acrh){ accessControlRequestHeader=std::string(acrh->p, acrh->len); }
+    if(acrh){ accessControlRequestHeader = std::string(acrh->p, acrh->len); }
 
     /* Get form variables */
 
@@ -235,6 +238,38 @@ void Httpd::list_directory(struct mg_connection *nc, struct http_message *hm){
 
     mg_send_http_chunk(nc, "", 0);  /* Send empty chunk, the end of response */
 }
+
+///// VOLUME API //////
+
+void Httpd::volume_getattr(struct mg_connection *nc, struct http_message *hm){
+    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+    std::string path = j["path"];
+    boost::filesystem::path p(path);
+
+    struct mg_str *acrh = mg_get_http_header(hm, "Access-Control-Request-Headers");
+    std::string accessControlRequestHeader;
+    if(acrh){ accessControlRequestHeader = std::string(acrh->p, acrh->len); }
+
+    // call getattr
+    std::string response;
+
+    /* Send headers */
+    mg_printf(nc, "HTTP/1.1 200 OK\r\n");
+    mg_printf(nc, "Content-Length: %lu\r\n", response.length());
+    //mg_printf(nc, "Content-Type: %s\r\n", contentType.c_str());
+    mg_printf(nc, "Access-Control-Allow-Origin: *\r\n");
+    mg_printf(nc, "Access-Control-Allow-Methods: POST, GET, OPTIONS, HEAD, PUT, DELETE\r\n");
+    if(accessControlRequestHeader.length()>0){
+        mg_printf(nc, "Access-Control-Allow-Headers: %s\r\n", accessControlRequestHeader.c_str());
+    }
+    mg_printf(nc, "Transfer-Encoding: chunked\r\n\r\n");
+
+    mg_printf_http_chunk(nc, response.c_str());
+
+    mg_send_http_chunk(nc, "", 0);  /* Send empty chunk, the end of response */
+}
+
+///////////////////////////////////
 
 void Httpd::handle_invalid_request(struct mg_connection *nc, struct http_message *hm){
     std::string contentType("application/json");
@@ -280,16 +315,38 @@ void Httpd::ev_handler(struct mg_connection *nc, int ev, void *ev_data) {
     struct http_message *hm = (struct http_message *) ev_data;
 
     switch (ev) {
-      case MG_EV_HTTP_REQUEST:
-        if (mg_vcmp(&hm->uri, "/api/addDirectory") == 0) {
-            instance->handle_directory(1, nc, hm);
-        } else if (mg_vcmp(&hm->uri, "/api/remDirectory") == 0) {
-            instance->handle_directory(0, nc, hm);
-        } else if (mg_vcmp(&hm->uri, "/api/listDirectory") == 0) {
-            instance->list_directory(nc, hm);
-        } else {
-            instance->handle_invalid_request(nc, hm);
-          //mg_serve_http(nc, hm, instance->data.s_http_server_opts);
+        case MG_EV_HTTP_REQUEST:
+        {
+            std::string method(hm->method.p, hm->method.len);
+            if(method == "OPTIONS"){
+                struct mg_str *acrh = mg_get_http_header(hm, "Access-Control-Request-Headers");
+                std::string accessControlRequestHeader;
+                if(acrh){ accessControlRequestHeader=std::string(acrh->p, acrh->len); }
+
+                mg_printf(nc, "HTTP/1.1 200 OK\r\n");
+                mg_printf(nc, "Access-Control-Allow-Origin: *\r\n");
+                mg_printf(nc, "Access-Control-Allow-Methods: POST, GET, OPTIONS, HEAD, PUT, DELETE\r\n");
+                if(accessControlRequestHeader.length()>0){
+                    mg_printf(nc, "Access-Control-Allow-Headers: %s\r\n", accessControlRequestHeader.c_str());
+                }
+
+                mg_send_http_chunk(nc, "", 0);  /* Send empty chunk, the end of response */
+
+                break;
+            }
+          
+            if (mg_vcmp(&hm->uri, "/api/addDirectory") == 0) {
+                instance->handle_directory(1, nc, hm);
+            } else if (mg_vcmp(&hm->uri, "/api/remDirectory") == 0) {
+                instance->handle_directory(0, nc, hm);
+            } else if (mg_vcmp(&hm->uri, "/api/listDirectory") == 0) {
+                instance->list_directory(nc, hm);
+            } else if(mg_vcmp(&hm->uri, "/api/volume/getattr") == 0){
+                instance->volume_getattr(nc, hm);
+            } else {
+                instance->handle_invalid_request(nc, hm);
+              //mg_serve_http(nc, hm, instance->data.s_http_server_opts);
+            }
         }
         break;
       default:

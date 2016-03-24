@@ -955,13 +955,6 @@ int Fuse::op_ftruncate(const boost::filesystem::path path, off_t size, struct fu
     return -errno;
 }
 
-
-#if _POSIX_SYNCHRONIZED_IO + 0 > 0 || defined(__FreeBSD__)
-#undef HAVE_FDATASYNC
-#else
-#define HAVE_FDATASYNC 1
-#endif
-
 int Fuse::op_fsync(const boost::filesystem::path path, int isdatasync, struct fuse_file_info *fi){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
     
@@ -980,13 +973,7 @@ int Fuse::op_fsync(const boost::filesystem::path path, int isdatasync, struct fu
         }
 
         int res = 0;
-
-#ifdef HAVE_FDATASYNC
-        if (isdatasync)
-            res = it->volume->fdatasync(path, fd);
-        else
-#endif
-            res = it->volume->fsync(path, fd);
+        res = it->volume->fsync(path, fd);
 
         if (res == -1)
             return -errno;

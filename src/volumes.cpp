@@ -176,7 +176,7 @@ Springy::Volumes::VolumeRelativeFile Volumes::getVolumesByVirtualFileName(const 
 Springy::Volumes::VolumesMap Volumes::getVolumes(){
     Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-	Synchronized syncToken(this->volumes, Synchronized::LockType::READ);
+    Synchronized syncToken(this->volumes, Synchronized::LockType::READ);
     
     return this->volumes;
 }

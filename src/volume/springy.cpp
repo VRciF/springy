@@ -1,6 +1,10 @@
 #include "springy.hpp"
 #include "../trace.hpp"
 #include "../util/json.hpp"
+#include "../util/string.hpp"
+#include "../exception.hpp"
+
+#include <boost/asio.hpp>
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -18,10 +22,91 @@ namespace Springy{
         
         nlohmann::json Springy::sendRequest(std::string host, int port, std::string path, nlohmann::json jparams){
             std::string params = jparams.dump();
-            
-            std::string response = "{errno: -1}";
 
-            return nlohmann::json::parse(response);
+            try
+            {
+                boost::asio::io_service io_service;
+
+                std::stringstream sport;
+                sport << port;
+
+                // Get a list of endpoints corresponding to the server name.
+                boost::asio::ip::tcp::resolver resolver(io_service);
+                boost::asio::ip::tcp::resolver::query query(host.c_str(), sport.str().c_str());
+                boost::asio::ip::tcp::resolver::iterator endpoint_iterator = resolver.resolve(query);
+                boost::asio::ip::tcp::resolver::iterator end;
+
+                // Try each endpoint until we successfully establish a connection.
+                boost::asio::ip::tcp::socket socket(io_service);
+                boost::system::error_code error = boost::asio::error::host_not_found;
+                while (error && endpoint_iterator != end)
+                {
+                    socket.close();
+                    socket.connect(*endpoint_iterator++, error);
+                }
+                if (error)
+                    throw boost::system::system_error(error);
+
+                // Form the request. We specify the "Connection: close" header so that the
+                // server will close the socket after transmitting the response. This will
+                // allow us to treat all data up until the EOF as the content.
+                boost::asio::streambuf request;
+                std::ostream request_stream(&request);
+                request_stream << "POST " << path << " HTTP/1.0\r\n";
+                request_stream << "Host: " << host << "\r\n";
+                request_stream << "Accept: */*\r\n";
+                request_stream << "Content-Length: " << params.size() << "\r\n";
+                request_stream << "Connection: close\r\n\r\n";
+                request_stream << params;
+
+                // Send the request.
+                boost::asio::write(socket, request);
+
+                // Read the response status line.
+                boost::asio::streambuf response;
+                boost::asio::read_until(socket, response, "\r\n");
+
+                // Check that response is OK.
+                std::istream response_stream(&response);
+                std::string http_version;
+                response_stream >> http_version;
+                unsigned int status_code;
+                response_stream >> status_code;
+                std::string status_message;
+                std::getline(response_stream, status_message);
+                if (!response_stream || http_version.substr(0, 5) != "HTTP/")
+                {
+                    throw ::Springy::Exception(__FILE__, __LINE__) << "Invalid response";
+                }
+                if (status_code != 200)
+                {
+                    throw ::Springy::Exception(__FILE__, __LINE__) << "Invalid Status Code retunred: " << status_code;
+                }
+
+                // Read the response headers, which are terminated by a blank line.
+                boost::asio::read_until(socket, response, "\r\n\r\n");
+
+                response.consume(response.size());
+
+                std::stringstream jsonResponse;
+
+                // Read until EOF, writing data to output as we go.
+                while (boost::asio::read(socket, response,
+                      boost::asio::transfer_at_least(1), error))
+                    jsonResponse << &response;
+                if (error != boost::asio::error::eof)
+                    throw boost::system::system_error(error);
+
+                return nlohmann::json::parse(jsonResponse.str());
+            }
+            catch (std::exception& e)
+            {
+                nlohmann::json j;
+                j["errno"] = -EIO;
+                j["message"] = e.what();
+
+                return j;
+            }
         }
         
         struct stat Springy::readStatFromJson(nlohmann::json j){
@@ -368,7 +453,7 @@ namespace Springy{
         }
         int Springy::mkfifo(boost::filesystem::path v_path, mode_t mode){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-            
+
             if(this->readonly){ errno = EROFS; return -1; }
 
             boost::filesystem::path p = this->concatPath(this->u.path(), v_path);
@@ -408,7 +493,7 @@ namespace Springy{
                 errno = err;
                 return -1;
             }
-            
+
             return 0;
         }
 
@@ -420,12 +505,22 @@ namespace Springy{
             if(this->readonly && (flags&O_RDONLY) != O_RDONLY){ errno = EROFS; return -1; }
 
             boost::filesystem::path p = this->concatPath(this->u.path(), v_file_name);
-            if(mode != 0){
-                return this->libc->open(__LINE__, p.c_str(), flags);
+
+            nlohmann::json j;
+            j["path"] = p.string();
+            j["flags"] = flags;
+            j["mode"] = mode;
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/open", j);
+
+            int err = j["errno"];
+            err = err < 0 ? -err : err;
+
+            if(err != 0){
+                errno = err;
+                return -1;
             }
-            else{
-                return this->libc->open(__LINE__, p.c_str(), flags, mode);
-            }
+            int fd = j["fd"];
+            return fd;
         }
         int Springy::creat(boost::filesystem::path v_file_name, mode_t mode){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
@@ -433,48 +528,161 @@ namespace Springy{
             if(this->readonly){ errno = EROFS; return -1; }
 
             boost::filesystem::path p = this->concatPath(this->u.path(), v_file_name);
-            return this->libc->creat(__LINE__, p.c_str(), mode);
+
+            nlohmann::json j;
+            j["path"] = p.string();
+            j["mode"] = mode;
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/creat", j);
+
+            int err = j["errno"];
+            err = err < 0 ? -err : err;
+
+            if(err != 0){
+                errno = err;
+                return -1;
+            }
+            int fd = j["fd"];
+            return fd;
         }
         int Springy::close(boost::filesystem::path v_file_name, int fd){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
             boost::filesystem::path p = this->concatPath(this->u.path(), v_file_name);
-            return this->libc->close(__LINE__, fd);
+
+            nlohmann::json j;
+            j["path"] = p.string();
+            j["fd"] = fd;
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/close", j);
+
+            int err = j["errno"];
+            err = err < 0 ? -err : err;
+
+            if(err != 0){
+                errno = err;
+                return -1;
+            }
+            return 0;
         }
-        
-        ssize_t Springy::pread(boost::filesystem::path v_file_name, int fd, void *buf, size_t count, off_t offset){
+
+        ssize_t Springy::write(boost::filesystem::path v_file_name, int fd, const void *buf, size_t count, off_t offset){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-            return this->libc->pread(__LINE__, fd, buf, count, offset);
+
+            boost::filesystem::path p = this->concatPath(this->u.path(), v_file_name);
+
+            nlohmann::json j;
+            j["path"] = p.string();
+            j["fd"] = fd;
+            j["offset"] = offset;
+            j["buf"] = ::Springy::Util::String::encode64(std::string((const char*)buf, count));
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/write", j);
+
+            int err = j["errno"];
+            err = err < 0 ? -err : err;
+
+            if(err != 0){
+                errno = err;
+                return -1;
+            }
+            return j["size"];
+        }
+        ssize_t Springy::read(boost::filesystem::path v_file_name, int fd, void *buf, size_t count, off_t offset){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+            boost::filesystem::path p = this->concatPath(this->u.path(), v_file_name);
+
+            nlohmann::json j;
+            j["path"] = p.string();
+            j["fd"] = fd;
+            j["offset"] = offset;
+            j["count"] = count;
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/read", j);
+
+            int err = j["errno"];
+            err = err < 0 ? -err : err;
+
+            if(err != 0){
+                errno = err;
+                return -1;
+            }
+
+            std::string buffer = ::Springy::Util::String::decode64(j["buf"]);
+            if(buffer.size() > 0){
+                memcpy(buf, buffer.data(), buffer.size());
+            }
+            return buffer.size();
         }
 
         int Springy::truncate(boost::filesystem::path v_path, int fd, off_t length){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-            
+
             if(this->readonly){ errno = EROFS; return -1; }
 
             boost::filesystem::path p = this->concatPath(this->u.path(), v_path);
-            return this->libc->truncate(__LINE__, p.c_str(), length);
+
+            nlohmann::json j;
+            j["path"] = p.string();
+            j["fd"] = fd;
+            j["length"] = length;
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/truncate", j);
+
+            int err = j["errno"];
+            err = err < 0 ? -err : err;
+
+            if(err != 0){
+                errno = err;
+                return -1;
+            }
+            return 0;
         }
 
         int Springy::fsync(boost::filesystem::path v_path, int fd){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             
             if(this->readonly){ errno = EROFS; return -1; }
+            
+            boost::filesystem::path p = this->concatPath(this->u.path(), v_path);
 
-            return this->libc->fsync(__LINE__, fd);
-        }
-        int Springy::fdatasync(boost::filesystem::path v_path, int fd){
-            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+            nlohmann::json j;
+            j["path"] = p.string();
+            j["fd"] = fd;
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/fsync", j);
 
-            if(this->readonly){ errno = EROFS; return -1; }
+            int err = j["errno"];
+            err = err < 0 ? -err : err;
 
-            return this->libc->fdatasync(__LINE__, fd);
+            if(err != 0){
+                errno = err;
+                return -1;
+            }
+            return 0;
         }
 
         int Springy::lock(boost::filesystem::path v_path, int fd, int cmd, struct ::flock *lck, const uint64_t *lock_owner){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+            
+            boost::filesystem::path p = this->concatPath(this->u.path(), v_path);
 
-            //return ulockmgr_op(fd, cmd, lck, lock_owner, (size_t)sizeof(*lock_owner));
+            nlohmann::json j, flck;
+            flck["l_type"]   = lck->l_type;
+            flck["l_whence"] = lck->l_whence;
+            flck["l_start"]  = lck->l_start;
+            flck["l_len"]    = lck->l_len;
+            flck["l_pid"]    = lck->l_pid;
+
+            j["path"] = p.string();
+            j["fd"] = fd;
+            j["cmd"] = cmd;
+            j["lock_owner"] = *lock_owner;
+            j["lock"] = flck;
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/locks", j);
+
+            int err = j["errno"];
+            err = err < 0 ? -err : err;
+
+            if(err != 0){
+                errno = err;
+                return -1;
+            }
             return 0;
         }
         
