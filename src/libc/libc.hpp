@@ -18,6 +18,7 @@
 #include <sys/resource.h>
 #include <fcntl.h>
 #include <sys/statvfs.h>
+#include <ulockmgr.h>
 
 namespace Springy{
     namespace LibC{
@@ -139,6 +140,8 @@ namespace Springy{
 #else
                 virtual char *strerror_r(int errnum, char *buf, size_t buflen){ Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__); return ::strerror_r(errnum, buf, buflen); }
 #endif
+                
+                virtual int ulockmgr_op(int fd, int cmd, struct ::flock *lock, const void *owner, size_t owner_len){ Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__); return ::ulockmgr_op(fd, cmd, lock, owner, owner_len); }
         };
     }
 }

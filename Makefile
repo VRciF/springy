@@ -12,7 +12,7 @@ endif
 
 TARGET := springy
 
-$(TARGET): $(OBJ) obj/mongose.o
+$(TARGET): setup $(OBJ) obj/mongose.o
 	$(CXX) $(CPPFLAGS) obj/mongoose.o $(OBJ) $(LDFLAGS) -o $@
 
 obj/%.o: src/%.cpp
@@ -20,6 +20,12 @@ obj/%.o: src/%.cpp
 
 obj/mongose.o:
 	$(CC) -o obj/mongoose.o -c src/mongoose.c
+	
+setup:
+	mkdir -p obj
+	mkdir -p obj/volume
+	mkdir -p obj/fsops
 
 clean:
-	find obj -name *.o -exec rm {} \;
+	find obj -name "*.o" -exec rm {} \;
+	find obj -name "*.d" -exec rm {} \;

@@ -19,6 +19,7 @@
 #include <map>
 
 #include "libc/ilibc.hpp"
+#include "fsops/fuse.hpp"
 
 namespace Springy{
     class Fuse{
@@ -36,39 +37,6 @@ namespace Springy{
             static void thread(Fuse *instance);
 
             ~Fuse();
-
-            void* op_init(struct fuse_conn_info *conn);
-            void op_destroy(void *arg);
-            int op_getattr(const boost::filesystem::path file_name, struct stat *buf);
-            int op_statfs(const boost::filesystem::path path, struct statvfs *buf);
-            int op_readdir(const boost::filesystem::path dirname, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info * fi);
-			int op_readlink(const boost::filesystem::path path, char *buf, size_t size);
-            int op_create(const boost::filesystem::path file, mode_t mode, struct fuse_file_info *fi);
-            int op_open(const boost::filesystem::path file, struct fuse_file_info *fi);
-            int op_release(const boost::filesystem::path path, struct fuse_file_info *fi);
-            int op_read(const boost::filesystem::path, char *buf, size_t count, off_t offset, struct fuse_file_info *fi);
-            int op_write(const boost::filesystem::path file, const char *buf, size_t count, off_t offset, struct fuse_file_info *fi);
-            int op_truncate(const boost::filesystem::path path, off_t size);
-            int op_ftruncate(const boost::filesystem::path path, off_t size, struct fuse_file_info *fi);
-            int op_access(const boost::filesystem::path path, int mask);
-            int op_mkdir(const boost::filesystem::path path, mode_t mode);
-            int op_rmdir(const boost::filesystem::path path);
-            int op_unlink(const boost::filesystem::path path);
-            int op_rename(const boost::filesystem::path from, const boost::filesystem::path to);
-            int op_utimens(const boost::filesystem::path path, const struct timespec ts[2]);
-            int op_chmod(const boost::filesystem::path path, mode_t mode);
-            int op_chown(const boost::filesystem::path path, uid_t uid, gid_t gid);
-            int op_symlink(const boost::filesystem::path from, const boost::filesystem::path to);
-            int op_link(const boost::filesystem::path from, const boost::filesystem::path to);
-            int op_mknod(const boost::filesystem::path path, mode_t mode, dev_t rdev);
-            int op_fsync(const boost::filesystem::path path, int isdatasync, struct fuse_file_info *fi);
-            int op_lock(const boost::filesystem::path path, struct fuse_file_info *fi, int cmd, struct flock *lck);
-            //int op_setxattr(const boost::filesystem::path file_name, const std::string attrname,
-			//				    const char *attrval, size_t attrvalsize, int flags);
-			//int op_getxattr(const boost::filesystem::path file_name, const std::string attrname, char *buf, size_t count);
-			//int op_listxattr(const boost::filesystem::path file_name, char *buf, size_t count);
-			//int op_removexattr(const boost::filesystem::path file_name, const std::string attrname);
-
 
             static void* init(struct fuse_conn_info *conn);
             static void destroy(void *arg);
@@ -97,18 +65,22 @@ namespace Springy{
             static int fsync(const char *path, int isdatasync, struct fuse_file_info *fi);
             static int lock(const char *path, struct fuse_file_info *fi, int cmd, struct flock *lck);
             static int setxattr(const char *path, const char *attrname,
-							    const char *attrval, size_t attrvalsize, int flags);
-			static int getxattr(const char *path, const char *attrname, char *buf, size_t count);
-			static int listxattr(const char *path, char *buf, size_t count);
-			static int removexattr(const char *path, const char *attrname);
+				const char *attrval, size_t attrvalsize, int flags);
+            static int getxattr(const char *path, const char *attrname, char *buf, size_t count);
+            static int listxattr(const char *path, char *buf, size_t count);
+            static int removexattr(const char *path, const char *attrname);
 
         protected:
             Springy::Settings *config;
             Springy::LibC::ILibC *libc;
+
+            Springy::FsOps::Fuse *operations;
+            
             
             bool readonly;
-
             bool singleThreaded;
+            bool withinTearDown;
+
             static const char *fsname;
             boost::filesystem::path mountpoint;
             char *fmountpoint;
@@ -147,27 +119,10 @@ namespace Springy{
             struct fuse_operations fops;
             struct fuse* fuse;
 
-            struct VolumeInfo{
-                boost::filesystem::path virtualMountPoint;
-                boost::filesystem::path volumeRelativeFileName;
-                Springy::Volume::IVolume* volume;
-                struct stat st;
-                struct statvfs stvfs;
-            };
-
             void saveFd(boost::filesystem::path file, Springy::Volume::IVolume *volume, int fd, int flags);
-            boost::filesystem::path concatPath(const boost::filesystem::path &p1, const boost::filesystem::path &p2);
 
-            VolumeInfo findVolume(const boost::filesystem::path file_name);
-            VolumeInfo getMaxFreeSpaceVolume(const boost::filesystem::path path);
-
-            boost::filesystem::path get_parent_path(const boost::filesystem::path path);
-            boost::filesystem::path get_base_name(const boost::filesystem::path path);
-            boost::filesystem::path get_remaining(const boost::filesystem::path p, const boost::filesystem::path front);
-            int cloneParentDirsIntoVolume(Springy::Volume::IVolume *volume, const boost::filesystem::path path);
             int copy_xattrs(Springy::Volume::IVolume *src, Springy::Volume::IVolume *dst, const boost::filesystem::path path);
 
-            int dir_is_empty(const boost::filesystem::path path);
             void reopen_files(const boost::filesystem::path file, const Springy::Volume::IVolume *volume);
             void move_file(int fd, boost::filesystem::path file, Springy::Volume::IVolume *from, fsblkcnt_t wsize);
 

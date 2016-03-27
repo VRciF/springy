@@ -240,7 +240,7 @@ namespace Springy{
         int File::lock(boost::filesystem::path v_path, int fd, int cmd, struct ::flock *lck, const uint64_t *lock_owner){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-            return ulockmgr_op(fd, cmd, lck, lock_owner, (size_t)sizeof(*lock_owner));
+            return this->libc->ulockmgr_op(fd, cmd, lck, lock_owner, (size_t)sizeof(*lock_owner));
         }
     }
 }

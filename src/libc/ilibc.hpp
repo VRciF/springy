@@ -132,6 +132,8 @@ namespace Springy{
 #else
                 virtual char *strerror_r(int errnum, char *buf, size_t buflen) = 0;
 #endif
+                                
+                virtual int ulockmgr_op(int fd, int cmd, struct ::flock *lock, const void *owner, size_t owner_len) = 0;
         };
     }
 }
