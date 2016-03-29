@@ -68,19 +68,29 @@ namespace Springy {
             throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "no space";
         }
 
-        boost::filesystem::path Fuse::get_parent_path(const boost::filesystem::path p) {
+        
+        void Fuse::saveFd(boost::filesystem::path file, Springy::Volume::IVolume *volume, int fd, int flags) {
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-            boost::filesystem::path parent = p.parent_path();
-            if (parent.empty()) {
-                throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "no parent directory";
+            Synchronized syncOpenFiles(this->openFiles);
+
+            int *syncToken = NULL;
+            openFiles_set::index<of_idx_volumeFile>::type &idx = this->openFiles.get<of_idx_volumeFile>();
+            openFiles_set::index<of_idx_volumeFile>::type::iterator it = idx.find(file);
+            if (it != idx.end()) {
+                syncToken = it->syncToken;
+            } else {
+                syncToken = new int;
             }
-            return parent;
+
+            struct openFile of = {file, volume, fd, flags, syncToken, true};
+            this->openFiles.insert(of);
         }
 
+        
+/*
         int Fuse::copy_xattrs(Springy::Volume::IVolume *src, Springy::Volume::IVolume *dst, const boost::filesystem::path path) {
 #ifndef WITHOUT_XATTR
-            /*
                 Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
                 int listsize=0, attrvalsize=0;
@@ -139,14 +149,13 @@ namespace Springy {
                 }
 
                 this->libc->free(__LINE__, listbuf);
-             */
+
 #endif
             return 0;
         }
 
         void Fuse::reopen_files(const boost::filesystem::path file, const Springy::Volume::IVolume *volume) {
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-            /*
                 boost::filesystem::path newFile = this->concatPath(newDirectory, file);
                 Synchronized syncOpenFiles(this->openFiles);
 
@@ -189,164 +198,145 @@ namespace Springy {
 
                     range.first->path = newDirectory;
                 }
-             */
         }
-
-        void Fuse::saveFd(boost::filesystem::path file, Springy::Volume::IVolume *volume, int fd, int flags) {
-            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-            Synchronized syncOpenFiles(this->openFiles);
-
-            int *syncToken = NULL;
-            openFiles_set::index<of_idx_volumeFile>::type &idx = this->openFiles.get<of_idx_volumeFile>();
-            openFiles_set::index<of_idx_volumeFile>::type::iterator it = idx.find(file);
-            if (it != idx.end()) {
-                syncToken = it->syncToken;
-            } else {
-                syncToken = new int;
-            }
-
-            struct openFile of = {file, volume, fd, flags, syncToken, true};
-            this->openFiles.insert(of);
-        }
+*/
 
         void Fuse::move_file(int fd, boost::filesystem::path file, Springy::Volume::IVolume *from, fsblkcnt_t wsize) {
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-            /*
-                    char *buf = NULL;
-                    ssize_t size;
-                    FILE *input = NULL, *output = NULL;
-                    struct utimbuf ftime = {0};
-                    fsblkcnt_t space;
-                    struct stat st;
+            char *buf = NULL;
+            ssize_t size;
+            FILE *input = NULL, *output = NULL;
+            struct utimbuf ftime = {0};
+            fsblkcnt_t space;
+            struct stat st;
 
-                Springy::Volume::IVolume *to = this->getMaxFreeSpaceVolume(file, &space);
-                if(space<wsize || from == to){
-                    throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "not enough space";
+            Abstract::VolumeInfo to = this->getMaxFreeSpaceVolume(file);
+            space = to.stvfs.f_bavail * tostvfs.f_frsize;
+            if(space<wsize || from == to.volume){
+                throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "not enough space";
+            }
+
+                // get file size
+                if (this->libc->fstat(__LINE__, fd, &st) != 0) {
+                throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "fstat failed";
                 }
 
-                    // get file size
-                    if (this->libc->fstat(__LINE__, fd, &st) != 0) {
-                    throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "fstat failed";
-                    }
 
-
-                // Hard link support is limited to a single device, and files with
-                // >1 hardlinks cannot be moved between devices since this would
-                // (a) result in partial files on the source device (b) not free
-                // the space from the source device during unlink.
-                    if (st.st_nlink > 1) {
-                    throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "cannot move file with hard links";
-                    }
-
-                this->create_parent_dirs(maxSpaceDir, file);
-
-                //boost::filesystem::path from = this->concatPath(directory, file);
-                //boost::filesystem::path to = this->concatPath(maxSpaceDir, file);
-
-                // in case fd is not open for reading - just open a new file pointer
-                    if (!(input = this->libc->fopen(__LINE__, from.c_str(), "r"))){
-                            throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "open file for reading failed: " << from.string();
+            // Hard link support is limited to a single device, and files with
+            // >1 hardlinks cannot be moved between devices since this would
+            // (a) result in partial files on the source device (b) not free
+            // the space from the source device during unlink.
+                if (st.st_nlink > 1) {
+                throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "cannot move file with hard links";
                 }
 
-                    if (!(output = this->libc->fopen(__LINE__, to.c_str(), "w+"))) {
-                    this->libc->fclose(__LINE__, input);
-                    throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "open file for writing failed: " << to.string();
-                    }
+            this->create_parent_dirs(maxSpaceDir, file);
 
-                int inputfd = this->libc->fileno(__LINE__, input);
-                int outputfd = this->libc->fileno(__LINE__, output);
+            //boost::filesystem::path from = this->concatPath(directory, file);
+            //boost::filesystem::path to = this->concatPath(maxSpaceDir, file);
 
-                    // move data
-                uint32_t allocationSize = 16*1024*1024; // 16 megabyte
-                buf = NULL;
-                do{
-                    try{
-                        buf = new char[allocationSize];
-                        break;
-                    }catch(...){
-                        allocationSize/=2;  // reduce allocation size at max to filesystem block size
-                    }
-                }while(allocationSize>=st.st_blksize || allocationSize>=4096);
-                if(buf==NULL){
-                    errno = ENOMEM;
-                    this->libc->fclose(__LINE__, input);
-                    this->libc->fclose(__LINE__, output);
-                    this->libc->unlink(__LINE__, to.c_str());
-                    throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "not enough memory";
+            // in case fd is not open for reading - just open a new file pointer
+                if (!(input = this->libc->fopen(__LINE__, from.c_str(), "r"))){
+                        throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "open file for reading failed: " << from.string();
+            }
+
+                if (!(output = this->libc->fopen(__LINE__, to.c_str(), "w+"))) {
+                this->libc->fclose(__LINE__, input);
+                throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "open file for writing failed: " << to.string();
                 }
 
-                    while((size = this->libc->read(__LINE__, inputfd, buf, sizeof(char)*allocationSize))>0) {
-                    ssize_t written = 0;
-                    while(written<size){
-                        size_t bytesWritten = this->libc->write(__LINE__, outputfd, buf+written, sizeof(char)*(size-written));
-                        if(bytesWritten>0){
-                            written += bytesWritten;
-                        }
-                        else{
-                            this->libc->fclose(__LINE__, input);
-                            this->libc->fclose(__LINE__, output);
-                            delete[] buf;
-                            this->libc->unlink(__LINE__, to.c_str());
-                            throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "moving file failed";
-                        }
-                    }
-                    }
+            int inputfd = this->libc->fileno(__LINE__, input);
+            int outputfd = this->libc->fileno(__LINE__, output);
 
-                delete[] buf;
-                    if(size==-1){
-                    this->libc->fclose(__LINE__, input);
-                    this->libc->fclose(__LINE__, output);
-                    this->libc->unlink(__LINE__, to.c_str());
-                    throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "read error occured";
-                }
-
-                    this->libc->fclose(__LINE__, input);
-
-                    // owner/group/permissions
-                    this->libc->fchmod(__LINE__, outputfd, st.st_mode);
-                    this->libc->fchown(__LINE__, outputfd, st.st_uid, st.st_gid);
-                    this->libc->fclose(__LINE__, output);
-
-                    // time
-                    ftime.actime = st.st_atime;
-                    ftime.modtime = st.st_mtime;
-                    this->libc->utime(__LINE__, to.c_str(), &ftime);
-
-            #ifndef WITHOUT_XATTR
-                    // extended attributes
-                    this->copy_xattrs(from, to, file);
-            #endif
-
+                // move data
+            uint32_t allocationSize = 16*1024*1024; // 16 megabyte
+            buf = NULL;
+            do{
                 try{
-                    Synchronized syncOpenFiles(this->openFiles);
+                    buf = new char[allocationSize];
+                    break;
+                }catch(...){
+                    allocationSize/=2;  // reduce allocation size at max to filesystem block size
+                }
+            }while(allocationSize>=st.st_blksize || allocationSize>=4096);
+            if(buf==NULL){
+                errno = ENOMEM;
+                this->libc->fclose(__LINE__, input);
+                this->libc->fclose(__LINE__, output);
+                this->libc->unlink(__LINE__, to.c_str());
+                throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "not enough memory";
+            }
 
-                    openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
-                    openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
-                    if(it!=idx.end()){
-                        it->path = maxSpaceDir;  // path is not indexed, thus no need to replace in openFiles
+                while((size = this->libc->read(__LINE__, inputfd, buf, sizeof(char)*allocationSize))>0) {
+                ssize_t written = 0;
+                while(written<size){
+                    size_t bytesWritten = this->libc->write(__LINE__, outputfd, buf+written, sizeof(char)*(size-written));
+                    if(bytesWritten>0){
+                        written += bytesWritten;
                     }
-                }catch(...){
-                    this->libc->unlink(__LINE__, to.c_str());
-                    throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "failed to modify internal data structure";
+                    else{
+                        this->libc->fclose(__LINE__, input);
+                        this->libc->fclose(__LINE__, output);
+                        delete[] buf;
+                        this->libc->unlink(__LINE__, to.c_str());
+                        throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "moving file failed";
+                    }
+                }
                 }
 
-                try{
-                    this->reopen_files(file, maxSpaceDir);
-                    this->libc->unlink(__LINE__, from.c_str());
-                }catch(...){
-                    this->libc->unlink(__LINE__, to.c_str());
-                    throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "failed to reopen already open files";
+            delete[] buf;
+                if(size==-1){
+                this->libc->fclose(__LINE__, input);
+                this->libc->fclose(__LINE__, output);
+                this->libc->unlink(__LINE__, to.c_str());
+                throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "read error occured";
+            }
+
+                this->libc->fclose(__LINE__, input);
+
+                // owner/group/permissions
+                this->libc->fchmod(__LINE__, outputfd, st.st_mode);
+                this->libc->fchown(__LINE__, outputfd, st.st_uid, st.st_gid);
+                this->libc->fclose(__LINE__, output);
+
+                // time
+                ftime.actime = st.st_atime;
+                ftime.modtime = st.st_mtime;
+                this->libc->utime(__LINE__, to.c_str(), &ftime);
+
+        #ifndef WITHOUT_XATTR
+                // extended attributes
+                this->copy_xattrs(from, to, file);
+        #endif
+
+            try{
+                Synchronized syncOpenFiles(this->openFiles);
+
+                openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
+                openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
+                if(it!=idx.end()){
+                    it->path = maxSpaceDir;  // path is not indexed, thus no need to replace in openFiles
                 }
-             */
+            }catch(...){
+                this->libc->unlink(__LINE__, to.c_str());
+                throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "failed to modify internal data structure";
+            }
+
+            try{
+                this->reopen_files(file, maxSpaceDir);
+                this->libc->unlink(__LINE__, from.c_str());
+            }catch(...){
+                this->libc->unlink(__LINE__, to.c_str());
+                throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "failed to reopen already open files";
+            }
         }
 
         /////////////////// File descriptor operations ////////////////////////////////
 
-        int Fuse::create(MetaRequest meta, const boost::filesystem::path file, mode_t mode, struct fuse_file_info *fi) {
+        int Fuse::create(MetaRequest meta, const boost::filesystem::path file, mode_t mode, struct ::fuse_file_info *fi) {
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-            if (this->readonly) {
+            if (meta.readonly) {
                 return -EROFS;
             }
 
@@ -387,13 +377,13 @@ namespace Springy {
                 return 0;
             }
 
-            return this->op_open(file, fi);
+            return this->open(meta, file, fi);
         }
 
-        int Fuse::open(MetaRequest meta, const boost::filesystem::path file, struct fuse_file_info *fi) {
+        int Fuse::open(MetaRequest meta, const boost::filesystem::path file, struct ::fuse_file_info *fi) {
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-            if (this->readonly && (fi->flags & O_RDONLY) != O_RDONLY) {
+            if (meta.readonly && (fi->flags & O_RDONLY) != O_RDONLY) {
                 return -EROFS;
             }
 
@@ -448,14 +438,12 @@ namespace Springy {
 
             if (getuid() == 0) {
                 struct stat st;
-                gid_t gid;
-                uid_t uid;
-                this->determineCaller(&uid, &gid);
+                gid_t gid = meta.g;
                 if (vinfo.volume->getattr(vinfo.volumeRelativeFileName, &st) == 0) {
                     // parent directory is SGID'ed
                     if (st.st_gid != getgid()) gid = st.st_gid;
                 }
-                vinfo.volume->chown(vinfo.volumeRelativeFileName, uid, gid);
+                vinfo.volume->chown(vinfo.volumeRelativeFileName, meta.u, gid);
             }
 
             try {
@@ -489,7 +477,7 @@ namespace Springy {
             return 0;
         }
 
-        int Fuse::release(MetaRequest meta, const boost::filesystem::path path, struct fuse_file_info *fi) {
+        int Fuse::release(MetaRequest meta, const boost::filesystem::path path, struct ::fuse_file_info *fi) {
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
             int fd = fi->fh;
@@ -526,7 +514,7 @@ namespace Springy {
             return 0;
         }
 
-        int Fuse::read(MetaRequest meta, const boost::filesystem::path file, char *buf, size_t count, off_t offset, struct fuse_file_info *fi) {
+        int Fuse::read(MetaRequest meta, const boost::filesystem::path file, char *buf, size_t count, off_t offset, struct ::fuse_file_info *fi) {
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
             if (buf == NULL) {
@@ -561,10 +549,10 @@ namespace Springy {
             }
         }
 
-        int Fuse::write(MetaRequest meta, const boost::filesystem::path file, const char *buf, size_t count, off_t offset, struct fuse_file_info *fi) {
+        int Fuse::write(MetaRequest meta, const boost::filesystem::path file, const char *buf, size_t count, off_t offset, struct ::fuse_file_info *fi) {
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-            if (this->readonly) {
+            if (meta.readonly) {
                 return -EROFS;
             }
 
@@ -640,7 +628,7 @@ namespace Springy {
         int Fuse::ftruncate(MetaRequest meta, const boost::filesystem::path path, off_t size, struct fuse_file_info *fi) {
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-            if (this->readonly) {
+            if (meta.readonly) {
                 return -EROFS;
             }
 
@@ -671,7 +659,7 @@ namespace Springy {
         int Fuse::fsync(MetaRequest meta, const boost::filesystem::path path, int isdatasync, struct fuse_file_info *fi) {
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-            if (this->readonly) {
+            if (meta.readonly) {
                 return -EROFS;
             }
 

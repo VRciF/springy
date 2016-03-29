@@ -76,7 +76,6 @@ namespace Springy{
 
             Springy::FsOps::Fuse *operations;
             
-            
             bool readonly;
             bool singleThreaded;
             bool withinTearDown;
@@ -87,44 +86,8 @@ namespace Springy{
             std::string fuseoptions;
             std::thread th;
 
-            struct of_idx_volumeFile{};
-            struct of_idx_fd{};
-            struct openFile{
-                boost::filesystem::path volumeFile;
-
-                Springy::Volume::IVolume *volume;
-
-                int fd; // file descriptor is unique
-                int flags;
-                mutable int *syncToken;
-
-                mutable bool valid;
-
-                bool operator<(const openFile& o)const{return fd < o.fd; }
-            };
-
-            typedef boost::multi_index::multi_index_container<
-              openFile,
-              boost::multi_index::indexed_by<
-                // sort by openFile::operator<
-                boost::multi_index::ordered_unique<boost::multi_index::tag<of_idx_fd>, boost::multi_index::member<openFile,int,&openFile::fd> >,
-                
-                // sort by less<string> on name
-                boost::multi_index::ordered_non_unique<boost::multi_index::tag<of_idx_volumeFile>,boost::multi_index::member<openFile,boost::filesystem::path,&openFile::volumeFile> >
-              > 
-            > openFiles_set;
-
-            openFiles_set openFiles;
-
             struct fuse_operations fops;
             struct fuse* fuse;
-
-            void saveFd(boost::filesystem::path file, Springy::Volume::IVolume *volume, int fd, int flags);
-
-            int copy_xattrs(Springy::Volume::IVolume *src, Springy::Volume::IVolume *dst, const boost::filesystem::path path);
-
-            void reopen_files(const boost::filesystem::path file, const Springy::Volume::IVolume *volume);
-            void move_file(int fd, boost::filesystem::path file, Springy::Volume::IVolume *from, fsblkcnt_t wsize);
 
             void determineCaller(uid_t *u=NULL, gid_t *g=NULL, pid_t *p=NULL, mode_t *mask=NULL);
     };
