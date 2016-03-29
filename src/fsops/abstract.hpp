@@ -16,6 +16,8 @@
 
 #include <boost/filesystem.hpp>
 
+#include <fuse.h>
+
 #include "../volume/ivolume.hpp"
 #include "../settings.hpp"
 #include "../libc/ilibc.hpp"
@@ -54,13 +56,14 @@ namespace Springy{
                     bool readonly;
                 };
 
-                virtual int create(MetaRequest meta, const boost::filesystem::path file, mode_t mode, struct fuse_file_info *fi);
-                virtual int open(MetaRequest meta, const boost::filesystem::path file, struct fuse_file_info *fi);
-                virtual int release(MetaRequest meta, const boost::filesystem::path path, struct fuse_file_info *fi);
-                virtual int read(MetaRequest meta, const boost::filesystem::path, char *buf, size_t count, off_t offset, struct fuse_file_info *fi);
-                virtual int write(MetaRequest meta, const boost::filesystem::path file, const char *buf, size_t count, off_t offset, struct fuse_file_info *fi);
-                virtual int ftruncate(MetaRequest meta, const boost::filesystem::path path, off_t size, struct fuse_file_info *fi);
-                virtual int fsync(MetaRequest meta, const boost::filesystem::path path, int isdatasync, struct fuse_file_info *fi);
+                virtual int create(MetaRequest meta, const boost::filesystem::path file, mode_t mode, struct ::fuse_file_info *fi);
+                virtual int open(MetaRequest meta, const boost::filesystem::path file, struct ::fuse_file_info *fi);
+                virtual int release(MetaRequest meta, const boost::filesystem::path path, struct ::fuse_file_info *fi);
+                virtual int read(MetaRequest meta, const boost::filesystem::path file, char *buf, size_t count, off_t offset, struct ::fuse_file_info *fi);
+                virtual int write(MetaRequest meta, const boost::filesystem::path file, const char *buf, size_t count, off_t offset, struct ::fuse_file_info *fi);
+                virtual int ftruncate(MetaRequest meta, const boost::filesystem::path path, off_t size, struct ::fuse_file_info *fi);
+                virtual int fsync(MetaRequest meta, const boost::filesystem::path path, int isdatasync, struct ::fuse_file_info *fi);
+
                 virtual int lock(MetaRequest meta, const boost::filesystem::path path, int fd, int cmd, struct ::flock *lck, const void *owner, size_t owner_len);
 
                 virtual int readdir(MetaRequest meta, const boost::filesystem::path dirname, void *buf, off_t offset, std::unordered_map<std::string, struct stat> &directories);

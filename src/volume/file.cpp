@@ -242,5 +242,26 @@ namespace Springy{
 
             return this->libc->ulockmgr_op(fd, cmd, lck, lock_owner, (size_t)sizeof(*lock_owner));
         }
+
+        int File::setxattr(boost::filesystem::path v_path, const std::string attrname, const char *attrval, size_t attrvalsize, int flags){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+            return this->libc->setxattr(__LINE__, v_path.string().c_str(), attrname.c_str(), attrval, attrvalsize, flags);
+        }
+        int File::getxattr(boost::filesystem::path v_path, const std::string attrname, char *buf, size_t count){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+            return this->libc->getxattr(__LINE__, v_path.string().c_str(), attrname.c_str(), buf, count);
+        }
+        int File::listxattr(boost::filesystem::path v_path, char *buf, size_t count){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+            return this->libc->listxattr(__LINE__, v_path.string().c_str(), buf, count);
+        }
+        int File::removexattr(boost::filesystem::path v_path, const std::string attrname){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+            return this->libc->removexattr(__LINE__, v_path.string().c_str(), attrname.c_str());
+        }
     }
 }

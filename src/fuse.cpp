@@ -349,7 +349,7 @@ namespace Springy {
         meta.readonly = instance->readonly;
         instance->determineCaller(&meta.u, &meta.g, &meta.p, &meta.mask);
 
-        return instance->operations->open(meta, boost::filesystem::path(path), fi->fh);
+        return instance->operations->open(meta, boost::filesystem::path(path), fi);
     }
 
     int Fuse::release(const char *path, struct fuse_file_info *fi) {

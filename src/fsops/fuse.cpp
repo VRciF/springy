@@ -200,7 +200,7 @@ namespace Springy {
                 }
         }
 */
-
+/*
         void Fuse::move_file(int fd, boost::filesystem::path file, Springy::Volume::IVolume *from, fsblkcnt_t wsize) {
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             char *buf = NULL;
@@ -211,39 +211,38 @@ namespace Springy {
             struct stat st;
 
             Abstract::VolumeInfo to = this->getMaxFreeSpaceVolume(file);
-            space = to.stvfs.f_bavail * tostvfs.f_frsize;
+            space = to.stvfs.f_bavail * to.stvfs.f_frsize;
             if(space<wsize || from == to.volume){
                 throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "not enough space";
             }
 
-                // get file size
-                if (this->libc->fstat(__LINE__, fd, &st) != 0) {
-                throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "fstat failed";
-                }
-
+            // get file size
+            if (this->libc->fstat(__LINE__, fd, &st) != 0) {
+            throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "fstat failed";
+            }
 
             // Hard link support is limited to a single device, and files with
             // >1 hardlinks cannot be moved between devices since this would
             // (a) result in partial files on the source device (b) not free
             // the space from the source device during unlink.
-                if (st.st_nlink > 1) {
-                throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "cannot move file with hard links";
-                }
+            if (st.st_nlink > 1) {
+            throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "cannot move file with hard links";
+            }
 
-            this->create_parent_dirs(maxSpaceDir, file);
+            this->create_parent_dirs(to.volume, file);
 
             //boost::filesystem::path from = this->concatPath(directory, file);
             //boost::filesystem::path to = this->concatPath(maxSpaceDir, file);
 
             // in case fd is not open for reading - just open a new file pointer
-                if (!(input = this->libc->fopen(__LINE__, from.c_str(), "r"))){
-                        throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "open file for reading failed: " << from.string();
+            if (!(input = this->libc->fopen(__LINE__, from.c_str(), "r"))){
+                    throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "open file for reading failed: " << from.string();
             }
 
-                if (!(output = this->libc->fopen(__LINE__, to.c_str(), "w+"))) {
+            if (!(output = this->libc->fopen(__LINE__, to.c_str(), "w+"))) {
                 this->libc->fclose(__LINE__, input);
                 throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "open file for writing failed: " << to.string();
-                }
+            }
 
             int inputfd = this->libc->fileno(__LINE__, input);
             int outputfd = this->libc->fileno(__LINE__, output);
@@ -330,151 +329,47 @@ namespace Springy {
                 throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "failed to reopen already open files";
             }
         }
-
+*/
         /////////////////// File descriptor operations ////////////////////////////////
 
         int Fuse::create(MetaRequest meta, const boost::filesystem::path file, mode_t mode, struct ::fuse_file_info *fi) {
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-            if (meta.readonly) {
-                return -EROFS;
-            }
-
-            try {
-                this->findVolume(file);
-                // file exists
-            } catch (...) {
-                Fuse::VolumeInfo vinfo;
+            
+            int fd = Abstract::create(meta, file, mode, fi);
+            if(fd >= 0){
+                Abstract::VolumeInfo vinfo;
                 try {
-                    vinfo = this->getMaxFreeSpaceVolume(file);
-                } catch (...) {
-                    t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-                    return -ENOSPC;
-                }
-
-                this->cloneParentDirsIntoVolume(vinfo.volume, vinfo.volumeRelativeFileName);
-
-                // file doesnt exist
-                int fd = vinfo.volume->creat(vinfo.volumeRelativeFileName, mode);
-                if (fd == -1) {
-                    return -errno;
-                }
-                try {
+                    vinfo = this->findVolume(file);
                     this->saveFd(vinfo.volumeRelativeFileName, vinfo.volume, fd, O_CREAT | O_WRONLY | O_TRUNC);
                     fi->fh = fd;
                 } catch (...) {
-                    if (errno == 0) {
-                        errno = ENOMEM;
-                    }
-                    int rval = errno;
-                    vinfo.volume->close(vinfo.volumeRelativeFileName, fd);
-
                     t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-                    return -rval;
+                    errno = ENOENT;
+                    return -errno;
                 }
-                return 0;
             }
 
-            return this->open(meta, file, fi);
+            return fd;
         }
 
         int Fuse::open(MetaRequest meta, const boost::filesystem::path file, struct ::fuse_file_info *fi) {
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-            if (meta.readonly && (fi->flags & O_RDONLY) != O_RDONLY) {
-                return -EROFS;
-            }
-
-            fi->fh = 0;
-
-            Fuse::VolumeInfo vinfo;
-
-            try {
-                int fd = 0;
-                vinfo = this->findVolume(file);
-                fd = vinfo.volume->open(vinfo.volumeRelativeFileName, fi->flags);
-                if (fd == -1) {
+            
+            int fd = Abstract::open(meta, file, fi);
+            if(fd >= 0){
+                Abstract::VolumeInfo vinfo;
+                try {
+                    vinfo = this->findVolume(file);
+                    this->saveFd(vinfo.volumeRelativeFileName, vinfo.volume, fd, O_CREAT | O_WRONLY | O_TRUNC);
+                    fi->fh = fd;
+                } catch (...) {
+                    t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+                    errno = ENOENT;
                     return -errno;
                 }
-
-                try {
-                    this->saveFd(vinfo.volumeRelativeFileName, vinfo.volume, fd, fi->flags);
-                } catch (...) {
-                    if (errno == 0) {
-                        errno = ENOMEM;
-                    }
-                    int rval = errno;
-                    vinfo.volume->close(vinfo.volumeRelativeFileName, fd);
-
-                    t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-                    return -rval;
-                }
-
-                fi->fh = fd;
-
-                return 0;
-            } catch (...) {
-                t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             }
 
-            try {
-                vinfo = this->getMaxFreeSpaceVolume(file);
-            } catch (...) {
-                t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-                return -ENOSPC;
-            }
-
-            this->cloneParentDirsIntoVolume(vinfo.volume, vinfo.volumeRelativeFileName);
-
-            int fd = -1;
-            fd = vinfo.volume->open(vinfo.volumeRelativeFileName, fi->flags);
-
-            if (fd == -1) {
-                return -errno;
-            }
-
-            if (getuid() == 0) {
-                struct stat st;
-                gid_t gid = meta.g;
-                if (vinfo.volume->getattr(vinfo.volumeRelativeFileName, &st) == 0) {
-                    // parent directory is SGID'ed
-                    if (st.st_gid != getgid()) gid = st.st_gid;
-                }
-                vinfo.volume->chown(vinfo.volumeRelativeFileName, meta.u, gid);
-            }
-
-            try {
-                Synchronized syncOpenFiles(this->openFiles);
-
-                int *syncToken = NULL;
-                openFiles_set::index<of_idx_volumeFile>::type &idx = this->openFiles.get<of_idx_volumeFile>();
-                openFiles_set::index<of_idx_volumeFile>::type::iterator it = idx.find(vinfo.volumeRelativeFileName);
-                if (it != idx.end()) {
-                    syncToken = it->syncToken;
-                } else {
-                    syncToken = new int;
-                }
-
-                struct openFile of = {vinfo.volumeRelativeFileName, vinfo.volume, fd, fi->flags, syncToken, true};
-                this->openFiles.insert(of);
-            } catch (...) {
-                if (errno == 0) {
-                    errno = ENOMEM;
-                }
-                int rval = errno;
-                vinfo.volume->close(vinfo.volumeRelativeFileName, fd);
-
-                t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-                return -rval;
-            }
-
-            fi->fh = fd;
-
-            return 0;
+            return fd;
         }
 
         int Fuse::release(MetaRequest meta, const boost::filesystem::path path, struct ::fuse_file_info *fi) {
@@ -535,7 +430,7 @@ namespace Springy {
 
                 Springy::Volume::IVolume *volume = it->volume;
                 ssize_t res;
-                res = volume->read(file, fd, buf, count, offset);
+                res = volume->read(it->volumeFile, fd, buf, count, offset);
                 if (res == -1) {
                     t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
                     return -errno;
@@ -565,6 +460,7 @@ namespace Springy {
 
             int *syncToken = NULL;
             Springy::Volume::IVolume *volume;
+            boost::filesystem::path volumeFile;
 
             try {
                 Synchronized syncOpenFiles(this->openFiles);
@@ -582,8 +478,9 @@ namespace Springy {
                     return -errno;
                 }
 
-                syncToken = it->syncToken;
-                volume = it->volume;
+                syncToken  = it->syncToken;
+                volume     = it->volume;
+                volumeFile = it->volumeFile;
             } catch (...) {
                 if (errno == 0) {
                     errno = EBADFD;
@@ -595,7 +492,7 @@ namespace Springy {
             Synchronized sync(syncToken);
 
             errno = 0;
-            res = volume->write(file, fd, buf, count, offset);
+            res = volume->write(volumeFile, fd, buf, count, offset);
             if ((res >= 0) || (res == -1 && errno != ENOSPC)) {
                 if (res == -1) {
                     t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
@@ -603,26 +500,27 @@ namespace Springy {
                 }
                 return res;
             }
+            return -errno;
 
-            struct stat st;
-            volume->getattr(file, &st);
+            //struct stat st;
+            //volume->getattr(volumeFile, &st);
 
-            // write failed, cause of no space left
-            errno = ENOSPC;
-            try {
-                this->move_file(fd, file, volume, (off_t) (offset + count) > st.st_size ? offset + count : st.st_size);
-            } catch (...) {
-                t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__, "exception catched");
-                return -errno;
-            }
+            //// write failed, cause of no space left
+            //errno = ENOSPC;
+            //try {
+            //    this->move_file(fd, volumeFile, volume, (off_t) (offset + count) > st.st_size ? offset + count : st.st_size);
+            //} catch (...) {
+            //    t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__, "exception catched");
+            //    return -errno;
+            //}
 
-            res = this->libc->pwrite(__LINE__, fd, buf, count, offset);
-            if (res == -1) {
-                t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__, "write failed");
-                return -errno;
-            }
+            //res = this->libc->pwrite(__LINE__, fd, buf, count, offset);
+            //if (res == -1) {
+            //    t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__, "write failed");
+            //    return -errno;
+            //}
 
-            return res;
+            //return res;
         }
 
         int Fuse::ftruncate(MetaRequest meta, const boost::filesystem::path path, off_t size, struct fuse_file_info *fi) {
@@ -676,7 +574,7 @@ namespace Springy {
                 }
 
                 int res = 0;
-                res = it->volume->fsync(path, fd);
+                res = it->volume->fsync(it->volumeFile, fd);
 
                 if (res == -1)
                     return -errno;
@@ -704,7 +602,7 @@ namespace Springy {
                     return -errno;
                 }
 
-                int res = it->volume->lock(path, fd, cmd, lck, &owner);
+                int res = it->volume->lock(it->volumeFile, fd, cmd, lck, (const uint64_t*)owner);
                 if (res == -1)
                     return -errno;
             } catch (...) {
@@ -716,17 +614,17 @@ namespace Springy {
             return 0;
         }
 
-        virtual int setxattr(MetaRequest meta, const boost::filesystem::path file_name, const std::string attrname,
+        int Fuse::setxattr(MetaRequest meta, const boost::filesystem::path file_name, const std::string attrname,
                              const char *attrval, size_t attrvalsize, int flags){
             return -ENOTSUP;
         }
-        virtual int getxattr(MetaRequest meta, const boost::filesystem::path file_name, const std::string attrname, char *buf, size_t count){
+        int Fuse::getxattr(MetaRequest meta, const boost::filesystem::path file_name, const std::string attrname, char *buf, size_t count){
             return -ENOTSUP;
         }
-        virtual int listxattr(MetaRequest meta, const boost::filesystem::path file_name, char *buf, size_t count){
+        int Fuse::listxattr(MetaRequest meta, const boost::filesystem::path file_name, char *buf, size_t count){
             return -ENOTSUP;
         }
-        virtual int removexattr(MetaRequest meta, const boost::filesystem::path file_name, const std::string attrname){
+        int Fuse::removexattr(MetaRequest meta, const boost::filesystem::path file_name, const std::string attrname){
             return -ENOTSUP;
         }
         

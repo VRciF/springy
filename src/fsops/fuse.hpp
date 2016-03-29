@@ -56,6 +56,10 @@ namespace Springy{
                 virtual int write(MetaRequest meta, const boost::filesystem::path file, const char *buf, size_t count, off_t offset, struct ::fuse_file_info *fi);
 
                 virtual int lock(MetaRequest meta, const boost::filesystem::path path, int fd, int cmd, struct ::flock *lck, const void *owner, size_t owner_len);
+
+                virtual int fsync(MetaRequest meta, const boost::filesystem::path path, int isdatasync, struct fuse_file_info *fi);
+                virtual int ftruncate(MetaRequest meta, const boost::filesystem::path path, off_t size, struct fuse_file_info *fi);
+
                 virtual int setxattr(MetaRequest meta, const boost::filesystem::path file_name, const std::string attrname,
                                      const char *attrval, size_t attrvalsize, int flags);
                 virtual int getxattr(MetaRequest meta, const boost::filesystem::path file_name, const std::string attrname, char *buf, size_t count);

@@ -70,6 +70,11 @@ namespace Springy{
                 virtual int fsync(boost::filesystem::path v_path, int fd) = 0;
                 
                 virtual int lock(boost::filesystem::path v_path, int fd, int cmd, struct ::flock *lck, const uint64_t *lock_owner) = 0;
+
+                virtual int setxattr(boost::filesystem::path v_path, const std::string attrname, const char *attrval, size_t attrvalsize, int flags) = 0;
+                virtual int getxattr(boost::filesystem::path v_path, const std::string attrname, char *buf, size_t count) = 0;
+                virtual int listxattr(boost::filesystem::path v_path, char *buf, size_t count) = 0;
+                virtual int removexattr(boost::filesystem::path v_path, const std::string attrname) = 0;
         };
     }
 }

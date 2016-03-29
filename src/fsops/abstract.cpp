@@ -685,78 +685,301 @@ namespace Springy {
             return -errno;
         }
 
+        int Abstract::setxattr(MetaRequest meta, const boost::filesystem::path file_name, const std::string attrname,
+                               const char *attrval, size_t attrvalsize, int flags){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-        //#ifndef WITHOUT_XATTR
-        //int Abstract::setxattr(MetaRequest meta, const boost::filesystem::path file_name, const std::string attrname,
-        //                const char *attrval, size_t attrvalsize, int flags){
-        //    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-        //
-        //	try{
-        //		boost::filesystem::path path = this->findVolume(file_name);
-        //        if (this->libc->setxattr(__LINE__, path.c_str(), attrname.c_str(), attrval, attrvalsize, flags) == -1){
-        //            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-        //            return -errno;
-        //         }
-        //		return 0;
-        //	}
-        //	catch(...){
-        //        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-        //    }
-        //	return -ENOENT;
-        //}
+            try{
+                Abstract::VolumeInfo vinfo = this->findVolume(file_name);
+                if(vinfo.volume->setxattr(vinfo.volumeRelativeFileName, attrname, attrval, attrvalsize, flags) == -1){
+                    t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+                    return -errno;
+                }
+                return 0;
+            }
+            catch(...){
+                t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+            }
+            return -ENOENT;
+        }
+        int Abstract::getxattr(MetaRequest meta, const boost::filesystem::path file_name, const std::string attrname, char *buf, size_t count){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-        //int Abstract::getxattr(MetaRequest meta, const boost::filesystem::path file_name, const std::string attrname, char *buf, size_t count){
-        //    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-        //
-        //	try{
-        //		boost::filesystem::path path = this->findPath(file_name);
-        //        int size = this->libc->getxattr(__LINE__, path.c_str(), attrname.c_str(), buf, count);
-        //        if(size == -1){
-        //            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-        //            return -errno;
-        //        }
-        //		return size;
-        //	}
-        //	catch(...){
-        //        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-        //    }
-        //	return -ENOENT;
-        //}
+            try{
+                Abstract::VolumeInfo vinfo = this->findVolume(file_name);
+                int size = vinfo.volume->getxattr(vinfo.volumeRelativeFileName, attrname, buf, count);
+                if(size == -1){
+                    t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+                    return -errno;
+                }
+                return size;
+            }
+            catch(...){
+                t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+            }
+            return -ENOENT;
+        }
+        int Abstract::listxattr(MetaRequest meta, const boost::filesystem::path file_name, char *buf, size_t count){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-        //int Abstract::listxattr(MetaRequest meta, const boost::filesystem::path file_name, char *buf, size_t count){
-        //    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-        //
-        //    try{
-        //		boost::filesystem::path path = this->findPath(file_name);
-        //		int ret = 0;
-        //        if((ret=this->libc->listxattr(__LINE__, path.c_str(), buf, count)) == -1){
-        //            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-        //            return -errno;
-        //        }
-        //		return ret;
-        //	}
-        //	catch(...){
-        //        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-        //    }
-        //	return -ENOENT;
-        //}
+            try{
+                Abstract::VolumeInfo vinfo = this->findVolume(file_name);
+                int size = vinfo.volume->listxattr(vinfo.volumeRelativeFileName, buf, count);
+                if(size == -1){
+                    t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+                    return -errno;
+                }
+                return size;
+            }
+            catch(...){
+                t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+            }
+            return -ENOENT;
+        }
+        int Abstract::removexattr(MetaRequest meta, const boost::filesystem::path file_name, const std::string attrname){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-        //int Abstract::removexattr(MetaRequest meta, const boost::filesystem::path file_name, const std::string attrname){
-        //    Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-        //
-        //	try{
-        //		boost::filesystem::path path = this->findPath(file_name);
-        //        if(this->libc->removexattr(__LINE__, path.c_str(), attrname.c_str()) == -1){
-        //            t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-        //            return -errno;
-        //        }
-        //		return 0;
-        //	}
-        //	catch(...){
-        //        t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-        //    }
-        //	return -ENOENT;
-        //}
-        //#endif
+            try{
+                Abstract::VolumeInfo vinfo = this->findVolume(file_name);
+                if(vinfo.volume->removexattr(vinfo.volumeRelativeFileName, attrname) == -1){
+                    t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+                    return -errno;
+                }
+                return 0;
+            }
+            catch(...){
+                t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+            }
+            return -ENOENT;
+        }
+
+        int Abstract::create(MetaRequest meta, const boost::filesystem::path file, mode_t mode, struct ::fuse_file_info *fi){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+            if (meta.readonly) {
+                return -EROFS;
+            }
+
+            try {
+                this->findVolume(file);
+                // file exists
+            } catch (...) {
+                Abstract::VolumeInfo vinfo;
+                try {
+                    vinfo = this->getMaxFreeSpaceVolume(file);
+                } catch (...) {
+                    t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+                    return -ENOSPC;
+                }
+
+                this->cloneParentDirsIntoVolume(vinfo.volume, vinfo.volumeRelativeFileName);
+
+                // file doesnt exist
+                int fd = vinfo.volume->creat(vinfo.volumeRelativeFileName, mode);
+                if (fd == -1) {
+                    return -errno;
+                }
+                try {
+                    fi->fh = fd;
+                } catch (...) {
+                    if (errno == 0) {
+                        errno = ENOMEM;
+                    }
+                    int rval = errno;
+                    vinfo.volume->close(vinfo.volumeRelativeFileName, fd);
+
+                    t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+                    return -rval;
+                }
+                return 0;
+            }
+
+            return this->open(meta, file, fi);
+        }
+        int Abstract::open(MetaRequest meta, const boost::filesystem::path file, struct ::fuse_file_info *fi){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+            if (meta.readonly && (fi->flags & O_RDONLY) != O_RDONLY) {
+                return -EROFS;
+            }
+
+            fi->fh = 0;
+
+            Abstract::VolumeInfo vinfo;
+
+            try {
+                int fd = 0;
+                vinfo = this->findVolume(file);
+                fd = vinfo.volume->open(vinfo.volumeRelativeFileName, fi->flags);
+                if (fd == -1) {
+                    return -errno;
+                }
+
+                fi->fh = fd;
+
+                return 0;
+            } catch (...) {
+                t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+            }
+
+            try {
+                vinfo = this->getMaxFreeSpaceVolume(file);
+            } catch (...) {
+                t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+                return -ENOSPC;
+            }
+
+            this->cloneParentDirsIntoVolume(vinfo.volume, vinfo.volumeRelativeFileName);
+
+            int fd = -1;
+            fd = vinfo.volume->open(vinfo.volumeRelativeFileName, fi->flags);
+
+            if (fd == -1) {
+                return -errno;
+            }
+
+            if (getuid() == 0) {
+                struct stat st;
+                gid_t gid = meta.g;
+                if (vinfo.volume->getattr(vinfo.volumeRelativeFileName, &st) == 0) {
+                    // parent directory is SGID'ed
+                    if (st.st_gid != getgid()) gid = st.st_gid;
+                }
+                vinfo.volume->chown(vinfo.volumeRelativeFileName, meta.u, gid);
+            }
+
+            fi->fh = fd;
+
+            return 0;
+        }
+        int Abstract::release(MetaRequest meta, const boost::filesystem::path path, struct ::fuse_file_info *fi){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+            
+            int fd = fi->fh;
+            if(fd < 0){
+                errno = EBADFD;
+                return -errno;
+            }
+
+            Abstract::VolumeInfo vinfo;
+            try {
+                vinfo = this->findVolume(path);
+                vinfo.volume->close(vinfo.volumeRelativeFileName, fd);
+            } catch (...) {
+                t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+            }
+
+            return 0;
+        }
+        int Abstract::read(MetaRequest meta, const boost::filesystem::path file, char *buf, size_t count, off_t offset, struct ::fuse_file_info *fi){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+            
+            int fd = fi->fh;
+            if(fd < 0){
+                errno = EBADFD;
+                return -errno;
+            }
+
+            if (buf == NULL) {
+                return -EINVAL;
+            }
+
+            Abstract::VolumeInfo vinfo;
+            try {
+                vinfo = this->findVolume(file);
+                int res = vinfo.volume->read(vinfo.volumeRelativeFileName, fd, buf, count, offset);
+                if (res == -1) {
+                    t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+                    return -errno;
+                }
+
+                return res;
+            } catch (...) {
+                t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+                errno = EBADFD;
+                return -errno;
+            }
+        }
+        int Abstract::write(MetaRequest meta, const boost::filesystem::path file, const char *buf, size_t count, off_t offset, struct ::fuse_file_info *fi){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+            
+            int fd = fi->fh;
+            if(fd < 0){
+                errno = EBADFD;
+                return -errno;
+            }
+
+            if (buf == NULL) {
+                return -EINVAL;
+            }
+
+            Abstract::VolumeInfo vinfo;
+            try {
+                vinfo = this->findVolume(file);
+                int res = vinfo.volume->write(vinfo.volumeRelativeFileName, fd, buf, count, offset);
+                if (res == -1) {
+                    t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+                    return -errno;
+                }
+
+                return res;
+            } catch (...) {
+                t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+                errno = EBADFD;
+                return -errno;
+            }
+        }
+        int Abstract::ftruncate(MetaRequest meta, const boost::filesystem::path path, off_t size, struct ::fuse_file_info *fi){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+            int fd = fi->fh;
+            if(fd < 0){
+                errno = EBADFD;
+                return -errno;
+            }
+
+            Abstract::VolumeInfo vinfo;
+            try {
+                vinfo = this->findVolume(path);
+                int res = vinfo.volume->truncate(vinfo.volumeRelativeFileName, fd, size);
+                if (res == -1) {
+                    t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+                    return -errno;
+                }
+
+                return res;
+            } catch (...) {
+                t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+                errno = EBADFD;
+                return -errno;
+            }
+        }
+        int Abstract::fsync(MetaRequest meta, const boost::filesystem::path path, int isdatasync, struct ::fuse_file_info *fi){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+            int fd = fi->fh;
+            if(fd < 0){
+                errno = EBADFD;
+                return -errno;
+            }
+
+            Abstract::VolumeInfo vinfo;
+            try {
+                vinfo = this->findVolume(path);
+                int res = vinfo.volume->fsync(vinfo.volumeRelativeFileName, fd);
+                if (res == -1) {
+                    t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+                    return -errno;
+                }
+
+                return res;
+            } catch (...) {
+                t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+                errno = EBADFD;
+                return -errno;
+            }
+        }
     }
 }
