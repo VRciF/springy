@@ -1,6 +1,8 @@
 #ifndef SPRINGY_VOLUME_FILE
 #define SPRINGY_VOLUME_FILE
 
+#include <boost/asio.hpp>
+
 #include "ivolume.hpp"
 #include "../libc/ilibc.hpp"
 #include "../util/uri.hpp"
@@ -13,7 +15,10 @@ namespace Springy{
                 ::Springy::LibC::ILibC *libc;
                 ::Springy::Util::Uri u;
                 bool readonly;
+                size_t maxBodySize;
+                boost::asio::io_service io_service;
 
+                boost::asio::ip::tcp::socket createConnection(std::string host, int port);
                 nlohmann::json sendRequest(std::string host, int port, std::string path, nlohmann::json jparams);
                 struct stat readStatFromJson(nlohmann::json j);
 
@@ -63,6 +68,11 @@ namespace Springy{
                 virtual int fsync(boost::filesystem::path v_path, int fd);
 
                 virtual int lock(boost::filesystem::path v_path, int fd, int cmd, struct ::flock *lck, const uint64_t *lock_owner);
+                
+                virtual int setxattr(boost::filesystem::path v_path, const std::string attrname, const char *attrval, size_t attrvalsize, int flags);
+                virtual int getxattr(boost::filesystem::path v_path, const std::string attrname, char *buf, size_t count);
+                virtual int listxattr(boost::filesystem::path v_path, char *buf, size_t count);
+                virtual int removexattr(boost::filesystem::path v_path, const std::string attrname);
         };
     }
 }

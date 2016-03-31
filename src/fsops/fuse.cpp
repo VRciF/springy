@@ -11,7 +11,7 @@ namespace Springy {
 
             Fuse::VolumeInfo vinfo;
 
-            Springy::Volumes::VolumeRelativeFile vols = this->config->volumes.getVolumesByVirtualFileName(file_name);
+            Springy::Volumes::VolumeRelativeFile vols = this->getVolumesByVirtualFileName(file_name);
             vinfo.virtualMountPoint = vols.virtualMountPoint;
             vinfo.volumeRelativeFileName = vols.volumeRelativeFileName;
 
@@ -33,7 +33,7 @@ namespace Springy {
         Abstract::VolumeInfo Fuse::getMaxFreeSpaceVolume(const boost::filesystem::path path) {
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-            Springy::Volumes::VolumeRelativeFile vols = this->config->volumes.getVolumesByVirtualFileName(path);
+            Springy::Volumes::VolumeRelativeFile vols = this->getVolumesByVirtualFileName(path);
 
             Fuse::VolumeInfo vinfo;
             vinfo.virtualMountPoint = vols.virtualMountPoint;
@@ -66,6 +66,12 @@ namespace Springy {
             }
 
             throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "no space";
+        }
+        
+        Springy::Volumes::VolumeRelativeFile Fuse::getVolumesByVirtualFileName(const boost::filesystem::path file_name){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+            return this->config->volumes.getVolumesByVirtualFileName(file_name);
         }
 
         

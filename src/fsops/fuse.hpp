@@ -1,8 +1,6 @@
 #ifndef SPRINGY_FSOPS_FUSE_HPP
 #define SPRINGY_FSOPS_FUSE_HPP
 
-#include <fuse.h>
-
 #include "abstract.hpp"
 
 namespace Springy{
@@ -38,11 +36,12 @@ namespace Springy{
 
                 openFiles_set openFiles;
 
-                void saveFd(boost::filesystem::path file, Springy::Volume::IVolume *volume, int fd, int flags);
-                void move_file(int fd, boost::filesystem::path file, Springy::Volume::IVolume *from, fsblkcnt_t wsize);
-
                 virtual Abstract::VolumeInfo findVolume(const boost::filesystem::path file_name);
                 virtual Abstract::VolumeInfo getMaxFreeSpaceVolume(const boost::filesystem::path path);
+                virtual Springy::Volumes::VolumeRelativeFile getVolumesByVirtualFileName(const boost::filesystem::path file_name);
+                
+                void saveFd(boost::filesystem::path file, Springy::Volume::IVolume *volume, int fd, int flags);
+                void move_file(int fd, boost::filesystem::path file, Springy::Volume::IVolume *from, fsblkcnt_t wsize);
 
             public:
                 Fuse(Springy::Settings *config, Springy::LibC::ILibC *libc);
@@ -65,7 +64,6 @@ namespace Springy{
                 virtual int getxattr(MetaRequest meta, const boost::filesystem::path file_name, const std::string attrname, char *buf, size_t count);
                 virtual int listxattr(MetaRequest meta, const boost::filesystem::path file_name, char *buf, size_t count);
                 virtual int removexattr(MetaRequest meta, const boost::filesystem::path file_name, const std::string attrname);
-                
         };
     }
 }

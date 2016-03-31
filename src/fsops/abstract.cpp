@@ -142,7 +142,7 @@ namespace Springy {
 
             unsigned long min_block = 0, min_frame = 0;
 
-            Springy::Volumes::VolumeRelativeFile vols = this->config->volumes.getVolumesByVirtualFileName(path);
+            Springy::Volumes::VolumeRelativeFile vols = this->getVolumesByVirtualFileName(path);
 
             std::set<Springy::Volume::IVolume*>::iterator it;
             for (it = vols.volumes.begin(); it != vols.volumes.end(); it++) {
@@ -222,7 +222,7 @@ namespace Springy {
             size_t found = 0;
             std::vector<Springy::Volume::IVolume*> dirs;
 
-            Springy::Volumes::VolumeRelativeFile vols = this->config->volumes.getVolumesByVirtualFileName(dirname);
+            Springy::Volumes::VolumeRelativeFile vols = this->getVolumesByVirtualFileName(dirname);
 
             std::set<Springy::Volume::IVolume*>::iterator it;
             for (it = vols.volumes.begin(); it != vols.volumes.end(); it++) {
@@ -418,7 +418,7 @@ namespace Springy {
             boost::filesystem::path toParent = to.parent_path();
             if(toParent.empty()){ toParent = boost::filesystem::path("/"); }
 
-            Springy::Volumes::VolumeRelativeFile fromVolumes = this->config->volumes.getVolumesByVirtualFileName(from);
+            Springy::Volumes::VolumeRelativeFile fromVolumes = this->getVolumesByVirtualFileName(from);
 
             std::set<Springy::Volume::IVolume*>::iterator it;
             for (it = fromVolumes.volumes.begin(); it != fromVolumes.volumes.end(); it++) {
@@ -447,7 +447,7 @@ namespace Springy {
             int res;
             struct stat st;
 
-            Springy::Volumes::VolumeRelativeFile pathVolumes = this->config->volumes.getVolumesByVirtualFileName(path);
+            Springy::Volumes::VolumeRelativeFile pathVolumes = this->getVolumesByVirtualFileName(path);
 
             std::set<Springy::Volume::IVolume*>::iterator it;
             for (it = pathVolumes.volumes.begin(); it != pathVolumes.volumes.end(); it++) {
@@ -481,7 +481,7 @@ namespace Springy {
             int res;
             struct stat st;
 
-            Springy::Volumes::VolumeRelativeFile pathVolumes = this->config->volumes.getVolumesByVirtualFileName(path);
+            Springy::Volumes::VolumeRelativeFile pathVolumes = this->getVolumesByVirtualFileName(path);
 
             std::set<Springy::Volume::IVolume*>::iterator it;
             for (it = pathVolumes.volumes.begin(); it != pathVolumes.volumes.end(); it++) {
@@ -515,7 +515,7 @@ namespace Springy {
             int res;
             struct stat st;
 
-            Springy::Volumes::VolumeRelativeFile pathVolumes = this->config->volumes.getVolumesByVirtualFileName(path);
+            Springy::Volumes::VolumeRelativeFile pathVolumes = this->getVolumesByVirtualFileName(path);
 
             std::set<Springy::Volume::IVolume*>::iterator it;
             for (it = pathVolumes.volumes.begin(); it != pathVolumes.volumes.end(); it++) {
@@ -700,6 +700,7 @@ namespace Springy {
             catch(...){
                 t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             }
+            errno = ENOENT;
             return -ENOENT;
         }
         int Abstract::getxattr(MetaRequest meta, const boost::filesystem::path file_name, const std::string attrname, char *buf, size_t count){
@@ -717,6 +718,7 @@ namespace Springy {
             catch(...){
                 t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             }
+            errno = ENOENT;
             return -ENOENT;
         }
         int Abstract::listxattr(MetaRequest meta, const boost::filesystem::path file_name, char *buf, size_t count){
@@ -734,6 +736,7 @@ namespace Springy {
             catch(...){
                 t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             }
+            errno = ENOENT;
             return -ENOENT;
         }
         int Abstract::removexattr(MetaRequest meta, const boost::filesystem::path file_name, const std::string attrname){
@@ -750,6 +753,7 @@ namespace Springy {
             catch(...){
                 t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
             }
+            errno = ENOENT;
             return -ENOENT;
         }
 
@@ -981,5 +985,6 @@ namespace Springy {
                 return -errno;
             }
         }
+
     }
 }

@@ -20,7 +20,7 @@ obj/%.o: src/%.cpp
 
 obj/mongose.o:
 	$(CC) -o obj/mongoose.o -c src/mongoose.c
-	
+
 setup:
 	mkdir -p obj
 	mkdir -p obj/volume

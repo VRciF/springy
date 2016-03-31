@@ -4,8 +4,6 @@
 #include "../util/string.hpp"
 #include "../exception.hpp"
 
-#include <boost/asio.hpp>
-
 #include <fcntl.h>
 #include <sys/stat.h>
 
@@ -14,38 +12,43 @@ namespace Springy{
         Springy::Springy(::Springy::LibC::ILibC *libc, ::Springy::Util::Uri u) : u(u){
             this->libc = libc;
             this->readonly = (this->u.query("ro").size()>0);
+            this->maxBodySize = 16*1024*1024;  // 16 MB
         }
         Springy::~Springy(){}
 
         std::string Springy::string(){ return this->u.string(); }
         bool Springy::isLocal(){ return false; }
-        
+
+        boost::asio::ip::tcp::socket Springy::createConnection(std::string host, int port){
+            std::stringstream sport;
+            sport << port;
+
+            // Get a list of endpoints corresponding to the server name.
+            boost::asio::ip::tcp::resolver resolver(this->io_service);
+            boost::asio::ip::tcp::resolver::query query(host.c_str(), sport.str().c_str());
+            boost::asio::ip::tcp::resolver::iterator endpoint_iterator = resolver.resolve(query);
+            boost::asio::ip::tcp::resolver::iterator end;
+
+            // Try each endpoint until we successfully establish a connection.
+            boost::asio::ip::tcp::socket socket(this->io_service);
+            boost::system::error_code error = boost::asio::error::host_not_found;
+            while (error && endpoint_iterator != end)
+            {
+                socket.close();
+                socket.connect(*endpoint_iterator++, error);
+            }
+            if (error)
+                throw boost::system::system_error(error);
+
+            return socket;
+        }
+
         nlohmann::json Springy::sendRequest(std::string host, int port, std::string path, nlohmann::json jparams){
             std::string params = jparams.dump();
 
             try
             {
-                boost::asio::io_service io_service;
-
-                std::stringstream sport;
-                sport << port;
-
-                // Get a list of endpoints corresponding to the server name.
-                boost::asio::ip::tcp::resolver resolver(io_service);
-                boost::asio::ip::tcp::resolver::query query(host.c_str(), sport.str().c_str());
-                boost::asio::ip::tcp::resolver::iterator endpoint_iterator = resolver.resolve(query);
-                boost::asio::ip::tcp::resolver::iterator end;
-
-                // Try each endpoint until we successfully establish a connection.
-                boost::asio::ip::tcp::socket socket(io_service);
-                boost::system::error_code error = boost::asio::error::host_not_found;
-                while (error && endpoint_iterator != end)
-                {
-                    socket.close();
-                    socket.connect(*endpoint_iterator++, error);
-                }
-                if (error)
-                    throw boost::system::system_error(error);
+                boost::asio::ip::tcp::socket socket = this->createConnection(host, port);
 
                 // Form the request. We specify the "Connection: close" header so that the
                 // server will close the socket after transmitting the response. This will
@@ -56,7 +59,7 @@ namespace Springy{
                 request_stream << "Host: " << host << "\r\n";
                 request_stream << "Accept: */*\r\n";
                 request_stream << "Content-Length: " << params.size() << "\r\n";
-                request_stream << "Connection: close\r\n\r\n";
+                request_stream << "Connection: keep-alive\r\n\r\n";
                 request_stream << params;
 
                 // Send the request.
@@ -83,21 +86,45 @@ namespace Springy{
                     throw ::Springy::Exception(__FILE__, __LINE__) << "Invalid Status Code retunred: " << status_code;
                 }
 
-                // Read the response headers, which are terminated by a blank line.
-                boost::asio::read_until(socket, response, "\r\n\r\n");
+                size_t contentLength = 0;
+                std::map<std::string, std::string> headers;
 
-                response.consume(response.size());
+                while(true){
+                    std::size_t n = boost::asio::read_until(socket, response, "\r\n");
+                    boost::asio::streambuf::const_buffers_type bufs = response.data();
+                    std::string line(boost::asio::buffers_begin(bufs), boost::asio::buffers_begin(bufs) + n);
 
-                std::stringstream jsonResponse;
+                    if(line.size()<=0 || line=="\r\n"){
+                        break;
+                    }
 
-                // Read until EOF, writing data to output as we go.
-                while (boost::asio::read(socket, response,
-                      boost::asio::transfer_at_least(1), error))
-                    jsonResponse << &response;
-                if (error != boost::asio::error::eof)
-                    throw boost::system::system_error(error);
+                    std::size_t pos = line.find_first_of(":");
+                    std::string key = line.substr(0, pos);
+                    std::string value = line.substr(pos+1);
+                    ::Springy::Util::String::trim(value);
+                    headers.insert(std::make_pair(key, value));
+                }
+                if(headers.find("Content-Length")!=headers.end()){
+                    contentLength = std::stoi(headers["Content-Length"]);
+                }
 
-                return nlohmann::json::parse(jsonResponse.str());
+                if(contentLength > this->maxBodySize){
+                    socket.close();
+                    throw boost::system::system_error(boost::asio::error::no_buffer_space);
+                }
+
+                std::string jsonResponse;
+                if(contentLength > 0){
+                    boost::system::error_code error;
+                    std::size_t n = boost::asio::read(socket, response, boost::asio::transfer_at_least(contentLength), error);
+                    if (error != boost::asio::error::eof)
+                        throw boost::system::system_error(error);
+
+                    boost::asio::streambuf::const_buffers_type bufs = response.data();
+                    jsonResponse = std::string(boost::asio::buffers_begin(bufs), boost::asio::buffers_begin(bufs) + n);
+                }
+
+                return nlohmann::json::parse(jsonResponse);
             }
             catch (std::exception& e)
             {
@@ -659,7 +686,7 @@ namespace Springy{
 
         int Springy::lock(boost::filesystem::path v_path, int fd, int cmd, struct ::flock *lck, const uint64_t *lock_owner){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-            
+
             boost::filesystem::path p = this->concatPath(this->u.path(), v_path);
 
             nlohmann::json j, flck;
@@ -686,6 +713,111 @@ namespace Springy{
             return 0;
         }
         
+        int Springy::setxattr(boost::filesystem::path v_path, const std::string attrname, const char *attrval, size_t attrvalsize, int flags){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+            boost::filesystem::path p = this->concatPath(this->u.path(), v_path);
+
+            nlohmann::json j;
+
+            j["path"] = p.string();
+            j["xattr"] = attrname;
+            j["value"] = ::Springy::Util::String::encode64(std::string(attrval, attrvalsize));
+            j["flags"] = flags;
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/setxattr", j);
+
+            int err = j["errno"];
+            err = err < 0 ? -err : err;
+
+            if(err != 0){
+                errno = err;
+                return -1;
+            }
+            return 0;
+        }
+        int Springy::getxattr(boost::filesystem::path v_path, const std::string attrname, char *buf, size_t count){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+            boost::filesystem::path p = this->concatPath(this->u.path(), v_path);
+
+            nlohmann::json j;
+
+            j["path"] = p.string();
+            j["xattr"] = attrname;
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/getxattr", j);
+
+            int err = j["errno"];
+            err = err < 0 ? -err : err;
+
+            if(err != 0){
+                errno = err;
+                return -1;
+            }
+            
+            std::string value = j["xattr"];
+            if(buf == NULL || count == 0){
+                errno = ERANGE;
+                return value.size();
+            }
+            if(value.size()>count){
+                errno = ERANGE;
+                return -1;
+            }
+            memcpy(buf, value.data(), value.size());
+
+            return 0;
+        }
+        int Springy::listxattr(boost::filesystem::path v_path, char *buf, size_t count){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+            boost::filesystem::path p = this->concatPath(this->u.path(), v_path);
+
+            nlohmann::json j;
+
+            j["path"] = p.string();
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/listxattr", j);
+
+            int err = j["errno"];
+            err = err < 0 ? -err : err;
+
+            if(err != 0){
+                errno = err;
+                return -1;
+            }
+            
+            size_t offset = 0;
+            for (nlohmann::json::iterator it = j["xattrs"].begin(); it != j["xattrs"].end() && count > 0; ++it) {
+                std::string value = *it;
+                if((value.size()+1) > count){ continue; }
+                count -= value.size();
+                memcpy(buf+offset, value.data(), value.size());
+                offset += value.size();
+                buf[offset] = '\0';
+                offset++;
+            }
+
+            return 0;
+        }
+        int Springy::removexattr(boost::filesystem::path v_path, const std::string attrname){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
+
+            boost::filesystem::path p = this->concatPath(this->u.path(), v_path);
+
+            nlohmann::json j;
+
+            j["path"] = p.string();
+            j["xattr"] = attrname;
+            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/removexattr", j);
+
+            int err = j["errno"];
+            err = err < 0 ? -err : err;
+
+            if(err != 0){
+                errno = err;
+                return -1;
+            }
+            return 0;
+        }
         
         boost::filesystem::path Springy::concatPath(const boost::filesystem::path &p1, const boost::filesystem::path &p2){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
