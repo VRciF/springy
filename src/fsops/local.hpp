@@ -1,11 +1,11 @@
 #ifndef SPRINGY_FSOPS_DECORATOR_LOCAL_HPP
 #define SPRINGY_FSOPS_DECORATOR_LOCAL_HPP
 
-#include "abstract.hpp"
+#include "fuse.hpp"
 
 namespace Springy{
     namespace FsOps{
-        class Local : public ::Springy::FsOps::Abstract{
+        class Local : public ::Springy::FsOps::Fuse{
             protected:
                 virtual Abstract::VolumeInfo findVolume(const boost::filesystem::path file_name);
                 virtual Abstract::VolumeInfo getMaxFreeSpaceVolume(const boost::filesystem::path path);

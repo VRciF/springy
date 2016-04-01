@@ -19,7 +19,7 @@ namespace Springy{
                 boost::asio::io_service io_service;
 
                 boost::asio::ip::tcp::socket createConnection(std::string host, int port);
-                nlohmann::json sendRequest(std::string host, int port, std::string path, nlohmann::json jparams);
+                nlohmann::json sendRequest(std::string path, nlohmann::json jparams, boost::asio::ip::tcp::socket *socket = NULL);
                 struct stat readStatFromJson(nlohmann::json j);
 
             public:

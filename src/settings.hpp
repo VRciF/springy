@@ -11,6 +11,7 @@
 #include "util/synchronized.hpp"
 #include "exception.hpp"
 #include "volumes.hpp"
+#include "openfiles.hpp"
 
 namespace Springy{
     class Settings{
@@ -22,6 +23,7 @@ namespace Springy{
             //DirectoryMap directories;
 
             Springy::Volumes volumes;
+            Springy::OpenFiles openFiles;
 
             boost::filesystem::path mountpoint;
             std::set<std::string> options;

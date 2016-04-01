@@ -149,6 +149,8 @@ namespace Springy{
                     
                     return ::ulockmgr_op(fd, cmd, lock, owner, owner_len);
                 }
+
+                virtual void* memset(int LINE, void *s, int c, size_t n){ Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__); return ::memset(s, c, n); }
         };
     }
 }

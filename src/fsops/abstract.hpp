@@ -56,8 +56,6 @@ namespace Springy{
                     bool readonly;
                 };
 
-                virtual int lock(MetaRequest meta, const boost::filesystem::path path, int fd, int cmd, struct ::flock *lck, const void *owner, size_t owner_len);
-
                 virtual int getattr(MetaRequest meta, const boost::filesystem::path file_name, struct stat *buf);
                 virtual int truncate(MetaRequest meta, const boost::filesystem::path path, off_t size);
                 virtual int statfs(MetaRequest meta, const boost::filesystem::path path, struct statvfs *buf);
@@ -81,6 +79,8 @@ namespace Springy{
                 virtual int listxattr(MetaRequest meta, const boost::filesystem::path file_name, char *buf, size_t count);
                 virtual int removexattr(MetaRequest meta, const boost::filesystem::path file_name, const std::string attrname);
 
+                virtual int lock(MetaRequest meta, const boost::filesystem::path path, int fd, int cmd, struct ::flock *lck, const void *owner, size_t owner_len);
+                
                 virtual int create(MetaRequest meta, const boost::filesystem::path file, mode_t mode, struct ::fuse_file_info *fi);
                 virtual int open(MetaRequest meta, const boost::filesystem::path file, struct ::fuse_file_info *fi);
                 virtual int release(MetaRequest meta, const boost::filesystem::path path, struct ::fuse_file_info *fi);

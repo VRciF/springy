@@ -17,6 +17,7 @@ extern "C"
 #endif
 }
 #include "settings.hpp"
+#include "fsops/local.hpp"
 
 namespace Springy{
     class Httpd{
@@ -33,13 +34,36 @@ namespace Springy{
             } http_meta;
 
             http_meta data;
-            Settings *config;
+            Springy::Settings *config;
+            Springy::LibC::ILibC *libc;
+            
+            Springy::FsOps::Local *operations;
+
+            void sendResponse(std::string response, struct mg_connection *nc, struct http_message *hm);
 
         public:
             void handle_directory(int what, struct mg_connection *nc, struct http_message *hm);
             void list_directory(struct mg_connection *nc, struct http_message *hm);
             
-            void volume_getattr(struct mg_connection *nc, struct http_message *hm);
+            void fs_getattr(struct mg_connection *nc, struct http_message *hm);
+            void fs_statfs(struct mg_connection *nc, struct http_message *hm);
+            void fs_readdir(struct mg_connection *nc, struct http_message *hm);
+            void fs_readlink(struct mg_connection *nc, struct http_message *hm);
+            void fs_access(struct mg_connection *nc, struct http_message *hm);
+            void fs_mkdir(struct mg_connection *nc, struct http_message *hm);
+            void fs_rmdir(struct mg_connection *nc, struct http_message *hm);
+            void fs_unlink(struct mg_connection *nc, struct http_message *hm);
+            void fs_rename(struct mg_connection *nc, struct http_message *hm);
+            void fs_utimens(struct mg_connection *nc, struct http_message *hm);
+            void fs_chmod(struct mg_connection *nc, struct http_message *hm);
+            void fs_chown(struct mg_connection *nc, struct http_message *hm);
+            void fs_symlink(struct mg_connection *nc, struct http_message *hm);
+            void fs_link(struct mg_connection *nc, struct http_message *hm);
+            void fs_mknod(struct mg_connection *nc, struct http_message *hm);
+            void fs_setxattr(struct mg_connection *nc, struct http_message *hm);
+            void fs_getxattr(struct mg_connection *nc, struct http_message *hm);
+            void fs_listxattr(struct mg_connection *nc, struct http_message *hm);
+            void fs_removexattr(struct mg_connection *nc, struct http_message *hm);
             
             void handle_invalid_request(struct mg_connection *nc, struct http_message *hm);
 
@@ -47,7 +71,7 @@ namespace Springy{
             static void* server(void *arg);
 
             Httpd();
-            Httpd& init(Settings *config);
+            Httpd& init(Settings *config, Springy::LibC::ILibC *libc);
             void start();
             void stop();
             ~Httpd();

@@ -4,7 +4,7 @@
 
 namespace Springy {
     namespace FsOps{
-        Local::Local(Springy::Settings *config, Springy::LibC::ILibC *libc) : Abstract(config, libc){}
+        Local::Local(Springy::Settings *config, Springy::LibC::ILibC *libc) : Fuse(config, libc){}
         Local::~Local(){}
 
 

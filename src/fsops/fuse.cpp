@@ -73,26 +73,6 @@ namespace Springy {
 
             return this->config->volumes.getVolumesByVirtualFileName(file_name);
         }
-
-        
-        void Fuse::saveFd(boost::filesystem::path file, Springy::Volume::IVolume *volume, int fd, int flags) {
-            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-            Synchronized syncOpenFiles(this->openFiles);
-
-            int *syncToken = NULL;
-            openFiles_set::index<of_idx_volumeFile>::type &idx = this->openFiles.get<of_idx_volumeFile>();
-            openFiles_set::index<of_idx_volumeFile>::type::iterator it = idx.find(file);
-            if (it != idx.end()) {
-                syncToken = it->syncToken;
-            } else {
-                syncToken = new int;
-            }
-
-            struct openFile of = {file, volume, fd, flags, syncToken, true};
-            this->openFiles.insert(of);
-        }
-
         
 /*
         int Fuse::copy_xattrs(Springy::Volume::IVolume *src, Springy::Volume::IVolume *dst, const boost::filesystem::path path) {
@@ -340,14 +320,13 @@ namespace Springy {
 
         int Fuse::create(MetaRequest meta, const boost::filesystem::path file, mode_t mode, struct ::fuse_file_info *fi) {
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-            
+
             int fd = Abstract::create(meta, file, mode, fi);
             if(fd >= 0){
                 Abstract::VolumeInfo vinfo;
                 try {
                     vinfo = this->findVolume(file);
-                    this->saveFd(vinfo.volumeRelativeFileName, vinfo.volume, fd, O_CREAT | O_WRONLY | O_TRUNC);
-                    fi->fh = fd;
+                    fi->fh = this->config->openFiles.add(vinfo.volumeRelativeFileName, vinfo.volume, fd, O_CREAT | O_WRONLY | O_TRUNC);
                 } catch (...) {
                     t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
                     errno = ENOENT;
@@ -366,8 +345,7 @@ namespace Springy {
                 Abstract::VolumeInfo vinfo;
                 try {
                     vinfo = this->findVolume(file);
-                    this->saveFd(vinfo.volumeRelativeFileName, vinfo.volume, fd, O_CREAT | O_WRONLY | O_TRUNC);
-                    fi->fh = fd;
+                    fi->fh = this->config->openFiles.add(vinfo.volumeRelativeFileName, vinfo.volume, fd, O_CREAT | O_WRONLY | O_TRUNC);
                 } catch (...) {
                     t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
                     errno = ENOENT;
@@ -384,24 +362,9 @@ namespace Springy {
             int fd = fi->fh;
 
             try {
-                Synchronized syncOpenFiles(this->openFiles);
-
-                openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
-                openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
-                if (it == idx.end()) {
-                    throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "bad descriptor";
-                }
-
-                it->volume->close(path, fd);
-
-                int *syncToken = it->syncToken;
-                boost::filesystem::path volumeFile = it->volumeFile;
-                idx.erase(it);
-
-                openFiles_set::index<of_idx_volumeFile>::type &vidx = this->openFiles.get<of_idx_volumeFile>();
-                if (vidx.find(volumeFile) == vidx.end()) {
-                    delete syncToken;
-                }
+                OpenFiles::openFile of = this->config->openFiles.getByDescriptor(fd);
+                of.volume->close(path, of.fd);
+                this->config->openFiles.remove(fd);
             } catch (...) {
                 if (errno == 0) {
                     errno = EBADFD;
@@ -424,19 +387,11 @@ namespace Springy {
 
             int fd = fi->fh;
             try {
-                Synchronized syncOpenFiles(this->openFiles);
+                OpenFiles::openFile of = this->config->openFiles.getByDescriptor(fd);
 
-                openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
-                openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
-                if (it != idx.end() && it->valid == false) {
-                    t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__, "file descriptor has been invalidated internally");
-                    errno = EINVAL;
-                    return -errno;
-                }
-
-                Springy::Volume::IVolume *volume = it->volume;
+                Springy::Volume::IVolume *volume = of.volume;
                 ssize_t res;
-                res = volume->read(it->volumeFile, fd, buf, count, offset);
+                res = volume->read(of.volumeFile, of.fd, buf, count, offset);
                 if (res == -1) {
                     t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
                     return -errno;
@@ -467,26 +422,15 @@ namespace Springy {
             int *syncToken = NULL;
             Springy::Volume::IVolume *volume;
             boost::filesystem::path volumeFile;
+            int vfd;
 
             try {
-                Synchronized syncOpenFiles(this->openFiles);
+                OpenFiles::openFile of = this->config->openFiles.getByDescriptor(fd);
 
-                openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
-                openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
-                if (it != idx.end() && it->valid == false) {
-                    t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__, "file descriptor has been invalidated internally");
-                    errno = EINVAL;
-                    return -errno;
-                }
-                if (it == idx.end()) {
-                    t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__, "file descriptor not found");
-                    errno = EBADFD;
-                    return -errno;
-                }
-
-                syncToken  = it->syncToken;
-                volume     = it->volume;
-                volumeFile = it->volumeFile;
+                syncToken  = of.syncToken;
+                volume     = of.volume;
+                volumeFile = of.volumeFile;
+                vfd        = of.fd;
             } catch (...) {
                 if (errno == 0) {
                     errno = EBADFD;
@@ -498,7 +442,7 @@ namespace Springy {
             Synchronized sync(syncToken);
 
             errno = 0;
-            res = volume->write(volumeFile, fd, buf, count, offset);
+            res = volume->write(volumeFile, vfd, buf, count, offset);
             if ((res >= 0) || (res == -1 && errno != ENOSPC)) {
                 if (res == -1) {
                     t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
@@ -538,16 +482,9 @@ namespace Springy {
 
             int fd = fi->fh;
             try {
-                Synchronized syncOpenFiles(this->openFiles);
+                OpenFiles::openFile of = this->config->openFiles.getByDescriptor(fd);
 
-                openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
-                openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
-                if (it != idx.end() && it->valid == false) {
-                    // MISSING: log that the descriptor has been invalidated as the reason of failing
-                    errno = EINVAL;
-                    return -errno;
-                }
-                if (it->volume->truncate(it->volumeFile, fd, size) == -1) {
+                if (of.volume->truncate(of.volumeFile, of.fd, size) == -1) {
                     t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
                     return -errno;
                 }
@@ -569,18 +506,10 @@ namespace Springy {
 
             int fd = fi->fh;
             try {
-                Synchronized syncOpenFiles(this->openFiles);
-
-                openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
-                openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
-                if (it != idx.end() && it->valid == false) {
-                    errno = EINVAL;
-                    t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-                    return -errno;
-                }
+                OpenFiles::openFile of = this->config->openFiles.getByDescriptor(fd);
 
                 int res = 0;
-                res = it->volume->fsync(it->volumeFile, fd);
+                res = of.volume->fsync(of.volumeFile, of.fd);
 
                 if (res == -1)
                     return -errno;
@@ -593,22 +522,13 @@ namespace Springy {
             return 0;
         }
 
-        
         int Fuse::lock(MetaRequest meta, const boost::filesystem::path path, int fd, int cmd, struct ::flock *lck, const void *owner, size_t owner_len){
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
             try {
-                Synchronized syncOpenFiles(this->openFiles);
+                OpenFiles::openFile of = this->config->openFiles.getByDescriptor(fd);
 
-                openFiles_set::index<of_idx_fd>::type &idx = this->openFiles.get<of_idx_fd>();
-                openFiles_set::index<of_idx_fd>::type::iterator it = idx.find(fd);
-                if (it != idx.end() && it->valid == false) {
-                    errno = EINVAL;
-                    t.log(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-                    return -errno;
-                }
-
-                int res = it->volume->lock(it->volumeFile, fd, cmd, lck, (const uint64_t*)owner);
+                int res = of.volume->lock(of.volumeFile, of.fd, cmd, lck, (const uint64_t*)owner);
                 if (res == -1)
                     return -errno;
             } catch (...) {

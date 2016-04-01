@@ -66,7 +66,7 @@ namespace Springy{
         }
 
         try{
-            httpd.init(this->config);
+            httpd.init(this->config, this->libc);
         }catch(std::runtime_error &e){
             std::cerr << e.what() << std::endl;
             this->exitStatus = -1;

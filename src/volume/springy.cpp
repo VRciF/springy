@@ -18,7 +18,18 @@ namespace Springy{
 
         std::string Springy::string(){ return this->u.string(); }
         bool Springy::isLocal(){ return false; }
+        
+        boost::filesystem::path Springy::concatPath(const boost::filesystem::path &p1, const boost::filesystem::path &p2){
+            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
+            boost::filesystem::path p = boost::filesystem::path(p1/p2);
+            while(p.string().back() == '/'){
+                p = p.parent_path();
+            }
+
+            return p;
+        }
+        
         boost::asio::ip::tcp::socket Springy::createConnection(std::string host, int port){
             std::stringstream sport;
             sport << port;
@@ -43,12 +54,22 @@ namespace Springy{
             return socket;
         }
 
-        nlohmann::json Springy::sendRequest(std::string host, int port, std::string path, nlohmann::json jparams){
+        nlohmann::json Springy::sendRequest(std::string path, nlohmann::json jparams, boost::asio::ip::tcp::socket *socket){
             std::string params = jparams.dump();
+
+            std::string host = this->u.host();
+            int port = this->u.port();
+
+            bool tmpSocketInUse = false;
+            boost::asio::ip::tcp::socket tmpSocket(this->io_service);
 
             try
             {
-                boost::asio::ip::tcp::socket socket = this->createConnection(host, port);
+                if(socket == NULL){
+                    tmpSocket = this->createConnection(host, port);
+                    socket = &tmpSocket;
+                    tmpSocketInUse = true;
+                }
 
                 // Form the request. We specify the "Connection: close" header so that the
                 // server will close the socket after transmitting the response. This will
@@ -63,11 +84,11 @@ namespace Springy{
                 request_stream << params;
 
                 // Send the request.
-                boost::asio::write(socket, request);
+                boost::asio::write(*socket, request);
 
                 // Read the response status line.
                 boost::asio::streambuf response;
-                boost::asio::read_until(socket, response, "\r\n");
+                boost::asio::read_until(*socket, response, "\r\n");
 
                 // Check that response is OK.
                 std::istream response_stream(&response);
@@ -90,7 +111,7 @@ namespace Springy{
                 std::map<std::string, std::string> headers;
 
                 while(true){
-                    std::size_t n = boost::asio::read_until(socket, response, "\r\n");
+                    std::size_t n = boost::asio::read_until(*socket, response, "\r\n");
                     boost::asio::streambuf::const_buffers_type bufs = response.data();
                     std::string line(boost::asio::buffers_begin(bufs), boost::asio::buffers_begin(bufs) + n);
 
@@ -109,19 +130,22 @@ namespace Springy{
                 }
 
                 if(contentLength > this->maxBodySize){
-                    socket.close();
                     throw boost::system::system_error(boost::asio::error::no_buffer_space);
                 }
 
                 std::string jsonResponse;
                 if(contentLength > 0){
                     boost::system::error_code error;
-                    std::size_t n = boost::asio::read(socket, response, boost::asio::transfer_at_least(contentLength), error);
-                    if (error != boost::asio::error::eof)
+                    std::size_t n = boost::asio::read(*socket, response, boost::asio::transfer_at_least(contentLength), error);
+                    if (error)
                         throw boost::system::system_error(error);
 
                     boost::asio::streambuf::const_buffers_type bufs = response.data();
                     jsonResponse = std::string(boost::asio::buffers_begin(bufs), boost::asio::buffers_begin(bufs) + n);
+                }
+                
+                if(tmpSocketInUse){
+                    tmpSocket.close();
                 }
 
                 return nlohmann::json::parse(jsonResponse);
@@ -132,6 +156,10 @@ namespace Springy{
                 j["errno"] = -EIO;
                 j["message"] = e.what();
 
+                if(tmpSocketInUse){
+                    tmpSocket.close();
+                }
+                
                 return j;
             }
         }
@@ -163,7 +191,7 @@ namespace Springy{
 
             nlohmann::json j;
             j["path"] = p.string();
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/getattr", j);
+            j = this->sendRequest("/api/volume/getattr", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -185,7 +213,7 @@ namespace Springy{
 
             nlohmann::json j;
             j["path"] = p.string();
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/statfs", j);
+            j = this->sendRequest("/api/volume/statfs", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -221,7 +249,7 @@ namespace Springy{
             j["path"] = p.string();
             j["owner"] = owner;
             j["group"] = group;
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/chown", j);
+            j = this->sendRequest("/api/volume/chown", j);
             
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -244,7 +272,7 @@ namespace Springy{
             j["path"] = p.string();
             j["mode"] = mode;
             std::string requestData = j.dump();
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/chmod", j);
+            j = this->sendRequest("/api/volume/chmod", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -265,7 +293,7 @@ namespace Springy{
             nlohmann::json j;
             j["path"] = p.string();
             j["mode"] = mode;
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/mkdir", j);
+            j = this->sendRequest("/api/volume/mkdir", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -285,7 +313,7 @@ namespace Springy{
 
             nlohmann::json j;
             j["path"] = p.string();
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/rmdir", j);
+            j = this->sendRequest("/api/volume/rmdir", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -305,7 +333,7 @@ namespace Springy{
             nlohmann::json j;
             j["old"] = this->concatPath(this->u.path(), v_old_name);
             j["new"] = this->concatPath(this->u.path(), v_new_name);
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/rename", j);
+            j = this->sendRequest("/api/volume/rename", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -329,7 +357,7 @@ namespace Springy{
             j["times"] = nlohmann::json::array();
             j["times"][0] = {{"tv_sec", times[0].tv_sec}, {"tv_nsec", times[0].tv_nsec}};
             j["times"][1] = {{"tv_sec", times[1].tv_sec}, {"tv_nsec", times[1].tv_nsec}};
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/utimensat", j);
+            j = this->sendRequest("/api/volume/utimensat", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -348,7 +376,7 @@ namespace Springy{
 
             nlohmann::json j;
             j["path"] = p.string();
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/readdir", j);
+            j = this->sendRequest("/api/volume/readdir", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -376,7 +404,7 @@ namespace Springy{
 
             nlohmann::json j;
             j["path"] = p.string();
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/readlink", j);
+            j = this->sendRequest("/api/volume/readlink", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -405,7 +433,7 @@ namespace Springy{
             nlohmann::json j;
             j["path"] = p.string();
             j["mode"] = mode;
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/access", j);
+            j = this->sendRequest("/api/volume/access", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -427,7 +455,7 @@ namespace Springy{
 
             nlohmann::json j;
             j["path"] = p.string();
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/unlink", j);
+            j = this->sendRequest("/api/volume/unlink", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -448,7 +476,7 @@ namespace Springy{
             nlohmann::json j;
             j["oldpath"] = this->concatPath(this->u.path(), oldpath);
             j["newpath"] = this->concatPath(this->u.path(), newpath);
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/link", j);
+            j = this->sendRequest("/api/volume/link", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -467,7 +495,7 @@ namespace Springy{
             nlohmann::json j;
             j["oldpath"] = this->concatPath(this->u.path(), oldpath);
             j["newpath"] = this->concatPath(this->u.path(), newpath);
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/symlink", j);
+            j = this->sendRequest("/api/volume/symlink", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -488,7 +516,7 @@ namespace Springy{
             nlohmann::json j;
             j["path"] = p.string();
             j["mode"] = mode;
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/mkfifo", j);
+            j = this->sendRequest("/api/volume/mkfifo", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -511,7 +539,7 @@ namespace Springy{
             j["path"] = p.string();
             j["mode"] = mode;
             j["dev"] = dev;
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/mknod", j);
+            j = this->sendRequest("/api/volume/mknod", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -537,7 +565,7 @@ namespace Springy{
             j["path"] = p.string();
             j["flags"] = flags;
             j["mode"] = mode;
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/open", j);
+            j = this->sendRequest("/api/volume/open", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -559,7 +587,7 @@ namespace Springy{
             nlohmann::json j;
             j["path"] = p.string();
             j["mode"] = mode;
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/creat", j);
+            j = this->sendRequest("/api/volume/creat", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -579,7 +607,7 @@ namespace Springy{
             nlohmann::json j;
             j["path"] = p.string();
             j["fd"] = fd;
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/close", j);
+            j = this->sendRequest("/api/volume/close", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -601,7 +629,7 @@ namespace Springy{
             j["fd"] = fd;
             j["offset"] = offset;
             j["buf"] = ::Springy::Util::String::encode64(std::string((const char*)buf, count));
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/write", j);
+            j = this->sendRequest("/api/volume/write", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -622,7 +650,7 @@ namespace Springy{
             j["fd"] = fd;
             j["offset"] = offset;
             j["count"] = count;
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/read", j);
+            j = this->sendRequest("/api/volume/read", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -650,7 +678,7 @@ namespace Springy{
             j["path"] = p.string();
             j["fd"] = fd;
             j["length"] = length;
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/truncate", j);
+            j = this->sendRequest("/api/volume/truncate", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -672,7 +700,7 @@ namespace Springy{
             nlohmann::json j;
             j["path"] = p.string();
             j["fd"] = fd;
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/fsync", j);
+            j = this->sendRequest("/api/volume/fsync", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -701,7 +729,7 @@ namespace Springy{
             j["cmd"] = cmd;
             j["lock_owner"] = *lock_owner;
             j["lock"] = flck;
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/locks", j);
+            j = this->sendRequest("/api/volume/locks", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -724,7 +752,7 @@ namespace Springy{
             j["xattr"] = attrname;
             j["value"] = ::Springy::Util::String::encode64(std::string(attrval, attrvalsize));
             j["flags"] = flags;
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/setxattr", j);
+            j = this->sendRequest("/api/volume/setxattr", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -744,7 +772,7 @@ namespace Springy{
 
             j["path"] = p.string();
             j["xattr"] = attrname;
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/getxattr", j);
+            j = this->sendRequest("/api/volume/getxattr", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -775,7 +803,7 @@ namespace Springy{
             nlohmann::json j;
 
             j["path"] = p.string();
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/listxattr", j);
+            j = this->sendRequest("/api/volume/listxattr", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -807,7 +835,7 @@ namespace Springy{
 
             j["path"] = p.string();
             j["xattr"] = attrname;
-            j = this->sendRequest(this->u.host(), this->u.port(), "/api/volume/removexattr", j);
+            j = this->sendRequest("/api/volume/removexattr", j);
 
             int err = j["errno"];
             err = err < 0 ? -err : err;
@@ -818,17 +846,5 @@ namespace Springy{
             }
             return 0;
         }
-        
-        boost::filesystem::path Springy::concatPath(const boost::filesystem::path &p1, const boost::filesystem::path &p2){
-            Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
-
-            boost::filesystem::path p = boost::filesystem::path(p1/p2);
-            while(p.string().back() == '/'){
-                p = p.parent_path();
-            }
-
-            return p;
-        }
-
     }
 }

@@ -134,6 +134,8 @@ namespace Springy{
 #endif
                                 
                 virtual int ulockmgr_op(int fd, int cmd, struct ::flock *lock, const void *owner, size_t owner_len) = 0;
+
+                virtual void* memset(int LINE, void *s, int c, size_t n) = 0;
         };
     }
 }

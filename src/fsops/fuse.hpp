@@ -7,40 +7,10 @@ namespace Springy{
     namespace FsOps{
         class Fuse : public Abstract{
             protected:
-                struct of_idx_volumeFile{};
-                struct of_idx_fd{};
-                struct openFile{
-                    boost::filesystem::path volumeFile;
-
-                    Springy::Volume::IVolume *volume;
-
-                    int fd; // file descriptor is unique
-                    int flags;
-                    mutable int *syncToken;
-
-                    mutable bool valid;
-
-                    bool operator<(const openFile& o)const{return fd < o.fd; }
-                };
-
-                typedef boost::multi_index::multi_index_container<
-                  openFile,
-                  boost::multi_index::indexed_by<
-                    // sort by openFile::operator<
-                    boost::multi_index::ordered_unique<boost::multi_index::tag<of_idx_fd>, boost::multi_index::member<openFile,int,&openFile::fd> >,
-
-                    // sort by less<string> on name
-                    boost::multi_index::ordered_non_unique<boost::multi_index::tag<of_idx_volumeFile>,boost::multi_index::member<openFile,boost::filesystem::path,&openFile::volumeFile> >
-                  > 
-                > openFiles_set;
-
-                openFiles_set openFiles;
-
                 virtual Abstract::VolumeInfo findVolume(const boost::filesystem::path file_name);
                 virtual Abstract::VolumeInfo getMaxFreeSpaceVolume(const boost::filesystem::path path);
                 virtual Springy::Volumes::VolumeRelativeFile getVolumesByVirtualFileName(const boost::filesystem::path file_name);
                 
-                void saveFd(boost::filesystem::path file, Springy::Volume::IVolume *volume, int fd, int flags);
                 void move_file(int fd, boost::filesystem::path file, Springy::Volume::IVolume *from, fsblkcnt_t wsize);
 
             public:
