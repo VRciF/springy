@@ -40,9 +40,13 @@ namespace Springy{
             Springy::LibC::ILibC *libc;
             
             Springy::FsOps::Local *operations;
+            
+            std::multimap<std::string, int> mapRemoteHostToFD;
 
             void sendResponse(std::string response, struct mg_connection *nc, struct http_message *hm);
             Springy::FsOps::Abstract::MetaRequest getMetaFromJson(nlohmann::json j);
+            
+            void closeOpenFilesByConnection(struct mg_connection *nc);
 
         public:
             void handle_directory(int what, struct mg_connection *nc, struct http_message *hm);

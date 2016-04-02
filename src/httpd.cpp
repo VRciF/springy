@@ -96,7 +96,21 @@ Httpd::~Httpd(){
     }
 }
 
+void Httpd::closeOpenFilesByConnection(struct mg_connection *nc){
+    char buf[64];
+    mg_conn_addr_to_str(nc, buf, sizeof(buf), MG_SOCK_STRINGIFY_REMOTE|MG_SOCK_STRINGIFY_IP|MG_SOCK_STRINGIFY_PORT);
+    std::string remoteHost(buf);
 
+    std::pair<std::multimap<std::string, int>::iterator,
+              std::multimap<std::string, int>::iterator> range = this->mapRemoteHostToFD.equal_range(remoteHost);
+    for(;range.first!=range.second;range.first++){
+        int fd = range.first->second;
+
+        OpenFiles::openFile of = this->config->openFiles.getByDescriptor(fd);
+        of.volume->close(of.volumeFile, of.fd);
+        this->config->openFiles.remove(fd);
+    }
+}
 
 void Httpd::sendResponse(std::string response, struct mg_connection *nc, struct http_message *hm){
     std::string contentType("application/json");
@@ -594,11 +608,11 @@ void Httpd::fs_removexattr(struct mg_connection *nc, struct http_message *hm){
     nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
     std::string path = j["path"];
     boost::filesystem::path p(path);
+    std::string attrname  = j["xattr"];
 
     Springy::FsOps::Abstract::MetaRequest meta = this->getMetaFromJson(j);
 
     j.clear();
-    std::string attrname  = j["xattr"];
     j["errno"] = this->operations->link(meta, p, attrname);
 
     std::string response = j.dump();
@@ -631,9 +645,67 @@ void Httpd::fs_truncate(struct mg_connection *nc, struct http_message *hm){
     this->sendResponse(response, nc, hm);
 }
 
-void Httpd::fs_create(struct mg_connection *nc, struct http_message *hm){}
-void Httpd::fs_open(struct mg_connection *nc, struct http_message *hm){}
-void Httpd::fs_release(struct mg_connection *nc, struct http_message *hm){}
+void Httpd::fs_create(struct mg_connection *nc, struct http_message *hm){
+    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+    std::string path = j["path"];
+    boost::filesystem::path p(path);
+    int flags   = j["flags"];
+    mode_t mode = j["mode"];
+
+    Springy::FsOps::Abstract::MetaRequest meta = this->getMetaFromJson(j);
+
+    j.clear();
+    struct ::fuse_file_info fi;
+    fi.flags = flags;
+    int fd = this->operations->create(meta, p, mode, &fi);
+    if(fd < 0){
+        j["errno"] = fd;
+    }
+    else{
+        j["errno"] = 0;
+        j["fd"] = fd;
+        
+        char buf[64];
+        mg_conn_addr_to_str(nc, buf, sizeof(buf), MG_SOCK_STRINGIFY_REMOTE|MG_SOCK_STRINGIFY_IP|MG_SOCK_STRINGIFY_PORT);
+        std::string remoteHost(buf);
+
+        this->mapRemoteHostToFD.insert(std::make_pair(remoteHost, fd));
+    }
+
+    std::string response = j.dump();
+    this->sendResponse(response, nc, hm);
+}
+void Httpd::fs_open(struct mg_connection *nc, struct http_message *hm){
+    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+    std::string path = j["path"];
+    boost::filesystem::path p(path);
+    int flags   = j["flags"];
+
+    Springy::FsOps::Abstract::MetaRequest meta = this->getMetaFromJson(j);
+
+    j.clear();
+    struct ::fuse_file_info fi;
+    fi.flags = flags;
+    int fd = this->operations->open(meta, p, &fi);
+    if(fd < 0){
+        j["errno"] = fd;
+    }
+    else{
+        j["errno"] = 0;
+        j["fd"] = fd;
+        
+        char buf[64];
+        mg_conn_addr_to_str(nc, buf, sizeof(buf), MG_SOCK_STRINGIFY_REMOTE|MG_SOCK_STRINGIFY_IP|MG_SOCK_STRINGIFY_PORT);
+        std::string remoteHost(buf);
+
+        this->mapRemoteHostToFD.insert(std::make_pair(remoteHost, fd));
+    }
+
+    std::string response = j.dump();
+    this->sendResponse(response, nc, hm);
+}
+void Httpd::fs_release(struct mg_connection *nc, struct http_message *hm){
+}
 void Httpd::fs_read(struct mg_connection *nc, struct http_message *hm){}
 void Httpd::fs_write(struct mg_connection *nc, struct http_message *hm){}
 void Httpd::fs_fsync(struct mg_connection *nc, struct http_message *hm){}
@@ -677,34 +749,6 @@ void Httpd::ev_handler(struct mg_connection *nc, int ev, void *ev_data) {
                 break;
             }
 
-            /*
-             * 
-                virtual int getattr(MetaRequest meta, const boost::filesystem::path file_name, struct stat *buf);
-                virtual int truncate(MetaRequest meta, const boost::filesystem::path path, off_t size);
-                virtual int statfs(MetaRequest meta, const boost::filesystem::path path, struct statvfs *buf);
-                virtual int readdir(MetaRequest meta, const boost::filesystem::path dirname, void *buf, off_t offset, std::unordered_map<std::string, struct stat> &directories);
-                virtual int readlink(MetaRequest meta, const boost::filesystem::path path, char *buf, size_t size);
-                virtual int access(MetaRequest meta, const boost::filesystem::path path, int mask);
-                virtual int mkdir(MetaRequest meta, const boost::filesystem::path path, mode_t mode);
-                virtual int rmdir(MetaRequest meta, const boost::filesystem::path path);
-                virtual int unlink(MetaRequest meta, const boost::filesystem::path path);
-             * 
-                virtual int rename(MetaRequest meta, const boost::filesystem::path from, const boost::filesystem::path to);
-                virtual int utimens(MetaRequest meta, const boost::filesystem::path path, const struct timespec ts[2]);
-                virtual int chmod(MetaRequest meta, const boost::filesystem::path path, mode_t mode);
-                virtual int chown(MetaRequest meta, const boost::filesystem::path path, uid_t uid, gid_t gid);
-                virtual int symlink(MetaRequest meta, const boost::filesystem::path from, const boost::filesystem::path to);
-                virtual int link(MetaRequest meta, const boost::filesystem::path from, const boost::filesystem::path to);
-                virtual int mknod(MetaRequest meta, const boost::filesystem::path path, mode_t mode, dev_t rdev);
-
-                virtual int setxattr(MetaRequest meta, const boost::filesystem::path file_name, const std::string attrname,
-                                     const char *attrval, size_t attrvalsize, int flags);
-                virtual int getxattr(MetaRequest meta, const boost::filesystem::path file_name, const std::string attrname, char *buf, size_t count);
-                virtual int listxattr(MetaRequest meta, const boost::filesystem::path file_name, char *buf, size_t count);
-                virtual int removexattr(MetaRequest meta, const boost::filesystem::path file_name, const std::string attrname);
-
-             */
-            
             if (mg_vcmp(&hm->uri, "/api/addDirectory") == 0) {
                 instance->handle_directory(1, nc, hm);
             } else if (mg_vcmp(&hm->uri, "/api/remDirectory") == 0) {
@@ -754,7 +798,12 @@ void Httpd::ev_handler(struct mg_connection *nc, int ev, void *ev_data) {
             }
         }
         break;
-      default:
+        case MG_EV_CLOSE:
+        {
+            instance->closeOpenFilesByConnection(nc);
+        }
+        break;
+        default:
         break;
     }
 }
