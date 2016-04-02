@@ -288,7 +288,7 @@ namespace Springy {
         
         std::unordered_map<std::string, struct stat> directories;
 
-        int rval = instance->operations->readdir(meta, boost::filesystem::path(dirname), buf, offset, directories);
+        int rval = instance->operations->readdir(meta, boost::filesystem::path(dirname), directories);
         
         if(rval == 0){
             std::unordered_map<std::string, struct stat>::iterator dit;

@@ -19,6 +19,8 @@ extern "C"
 #include "settings.hpp"
 #include "fsops/local.hpp"
 
+#include "util/json.hpp"
+
 namespace Springy{
     class Httpd{
         protected:
@@ -40,6 +42,7 @@ namespace Springy{
             Springy::FsOps::Local *operations;
 
             void sendResponse(std::string response, struct mg_connection *nc, struct http_message *hm);
+            Springy::FsOps::Abstract::MetaRequest getMetaFromJson(nlohmann::json j);
 
         public:
             void handle_directory(int what, struct mg_connection *nc, struct http_message *hm);
@@ -64,7 +67,15 @@ namespace Springy{
             void fs_getxattr(struct mg_connection *nc, struct http_message *hm);
             void fs_listxattr(struct mg_connection *nc, struct http_message *hm);
             void fs_removexattr(struct mg_connection *nc, struct http_message *hm);
-            
+
+            void fs_truncate(struct mg_connection *nc, struct http_message *hm);
+            void fs_create(struct mg_connection *nc, struct http_message *hm);
+            void fs_open(struct mg_connection *nc, struct http_message *hm);
+            void fs_release(struct mg_connection *nc, struct http_message *hm);
+            void fs_read(struct mg_connection *nc, struct http_message *hm);
+            void fs_write(struct mg_connection *nc, struct http_message *hm);
+            void fs_fsync(struct mg_connection *nc, struct http_message *hm);
+
             void handle_invalid_request(struct mg_connection *nc, struct http_message *hm);
 
             static void ev_handler(struct mg_connection *nc, int ev, void *ev_data);

@@ -349,14 +349,20 @@ namespace Springy{
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 
             if(this->readonly){ errno = EROFS; return -1; }
-            
+
             boost::filesystem::path p = this->concatPath(this->u.path(), v_path);
 
-            nlohmann::json j;
+            nlohmann::json j, t1, t2;
             j["path"] = p.string();
             j["times"] = nlohmann::json::array();
-            j["times"][0] = {{"tv_sec", times[0].tv_sec}, {"tv_nsec", times[0].tv_nsec}};
-            j["times"][1] = {{"tv_sec", times[1].tv_sec}, {"tv_nsec", times[1].tv_nsec}};
+
+            t1["tv_sec"]  = times[0].tv_sec;
+            t1["tv_nsec"] = times[0].tv_nsec;
+            t2["tv_sec"]  = times[1].tv_sec;
+            t2["tv_nsec"] = times[2].tv_nsec;
+
+            j["times"][0] = t1;
+            j["times"][1] = t2;
             j = this->sendRequest("/api/volume/utimensat", j);
 
             int err = j["errno"];
@@ -474,8 +480,8 @@ namespace Springy{
             if(this->readonly){ errno = EROFS; return -1; }
 
             nlohmann::json j;
-            j["oldpath"] = this->concatPath(this->u.path(), oldpath);
-            j["newpath"] = this->concatPath(this->u.path(), newpath);
+            j["old"] = this->concatPath(this->u.path(), oldpath);
+            j["new"] = this->concatPath(this->u.path(), newpath);
             j = this->sendRequest("/api/volume/link", j);
 
             int err = j["errno"];
@@ -493,8 +499,8 @@ namespace Springy{
             if(this->readonly){ errno = EROFS; return -1; }
 
             nlohmann::json j;
-            j["oldpath"] = this->concatPath(this->u.path(), oldpath);
-            j["newpath"] = this->concatPath(this->u.path(), newpath);
+            j["old"] = this->concatPath(this->u.path(), oldpath);
+            j["new"] = this->concatPath(this->u.path(), newpath);
             j = this->sendRequest("/api/volume/symlink", j);
 
             int err = j["errno"];
@@ -677,7 +683,7 @@ namespace Springy{
             nlohmann::json j;
             j["path"] = p.string();
             j["fd"] = fd;
-            j["length"] = length;
+            j["size"] = length;
             j = this->sendRequest("/api/volume/truncate", j);
 
             int err = j["errno"];
@@ -781,8 +787,8 @@ namespace Springy{
                 errno = err;
                 return -1;
             }
-            
-            std::string value = j["xattr"];
+
+            std::string value = ::Springy::Util::String::decode64(j["xattr"]);
             if(buf == NULL || count == 0){
                 errno = ERANGE;
                 return value.size();
@@ -816,6 +822,7 @@ namespace Springy{
             size_t offset = 0;
             for (nlohmann::json::iterator it = j["xattrs"].begin(); it != j["xattrs"].end() && count > 0; ++it) {
                 std::string value = *it;
+                value = ::Springy::Util::String::encode64(value);
                 if((value.size()+1) > count){ continue; }
                 count -= value.size();
                 memcpy(buf+offset, value.data(), value.size());

@@ -213,8 +213,6 @@ namespace Springy {
         int Abstract::readdir(
                 MetaRequest meta,
                 const boost::filesystem::path dirname,
-                void *buf,
-                off_t offset,
                 std::unordered_map<std::string, struct stat> &directories) {
             Trace t(__FILE__, __PRETTY_FUNCTION__, __LINE__);
 

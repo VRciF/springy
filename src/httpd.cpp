@@ -16,8 +16,7 @@
 
 #include "httpd.hpp"
 #include "exception.hpp"
-
-#include "util/json.hpp"
+#include "util/string.hpp"
 
 namespace Springy{
 
@@ -133,6 +132,15 @@ void Httpd::sendResponse(std::string response, struct mg_connection *nc, struct 
 
     mg_send_http_chunk(nc, "", 0);  /* Send empty chunk, the end of response */
 }
+Springy::FsOps::Abstract::MetaRequest Httpd::getMetaFromJson(nlohmann::json j){
+    Springy::FsOps::Abstract::MetaRequest meta;
+    meta.g = j.value("group", -1);
+    meta.u = j.value("user", -1);
+    meta.mask = j.value("mask", -1);
+    meta.readonly = j.value("readonly", -1);
+
+    return meta;
+}
 
 void Httpd::handle_directory(int what, struct mg_connection *nc, struct http_message *hm){
   char directory[8192] = {'\0'};
@@ -228,9 +236,10 @@ void Httpd::fs_getattr(struct mg_connection *nc, struct http_message *hm){
     std::string path = j["path"];
     boost::filesystem::path p(path);
 
-    // call getattr
+    Springy::FsOps::Abstract::MetaRequest meta = this->getMetaFromJson(j);
+
     struct stat st;
-    Springy::FsOps::Abstract::MetaRequest meta;
+    j.clear();
     j["errno"] = this->operations->getattr(meta, p, &st);
     if(j["errno"]==0){
         j["st_dev"]     = st.st_dev;
@@ -252,24 +261,383 @@ void Httpd::fs_getattr(struct mg_connection *nc, struct http_message *hm){
     this->sendResponse(response, nc, hm);
 }
 
-void Httpd::fs_statfs(struct mg_connection *nc, struct http_message *hm){}
-void Httpd::fs_readdir(struct mg_connection *nc, struct http_message *hm){}
-void Httpd::fs_readlink(struct mg_connection *nc, struct http_message *hm){}
-void Httpd::fs_access(struct mg_connection *nc, struct http_message *hm){}
-void Httpd::fs_mkdir(struct mg_connection *nc, struct http_message *hm){}
-void Httpd::fs_rmdir(struct mg_connection *nc, struct http_message *hm){}
-void Httpd::fs_unlink(struct mg_connection *nc, struct http_message *hm){}
-void Httpd::fs_rename(struct mg_connection *nc, struct http_message *hm){}
-void Httpd::fs_utimens(struct mg_connection *nc, struct http_message *hm){}
-void Httpd::fs_chmod(struct mg_connection *nc, struct http_message *hm){}
-void Httpd::fs_chown(struct mg_connection *nc, struct http_message *hm){}
-void Httpd::fs_symlink(struct mg_connection *nc, struct http_message *hm){}
-void Httpd::fs_link(struct mg_connection *nc, struct http_message *hm){}
-void Httpd::fs_mknod(struct mg_connection *nc, struct http_message *hm){}
-void Httpd::fs_setxattr(struct mg_connection *nc, struct http_message *hm){}
-void Httpd::fs_getxattr(struct mg_connection *nc, struct http_message *hm){}
-void Httpd::fs_listxattr(struct mg_connection *nc, struct http_message *hm){}
-void Httpd::fs_removexattr(struct mg_connection *nc, struct http_message *hm){}
+void Httpd::fs_statfs(struct mg_connection *nc, struct http_message *hm){
+    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+    std::string path = j["path"];
+    boost::filesystem::path p(path);
+
+    Springy::FsOps::Abstract::MetaRequest meta = this->getMetaFromJson(j);
+
+    struct statvfs stvfs;
+    j.clear();
+    j["errno"] = this->operations->statfs(meta, p, &stvfs);
+    if(j["errno"]==0){
+        j["f_bsize"]    = stvfs.f_bsize;
+        j["f_frsize"]   = stvfs.f_frsize;
+        j["f_blocks"]   = stvfs.f_blocks;
+        j["f_bfree"]    = stvfs.f_bfree;
+        j["f_bavail"]   = stvfs.f_bavail;
+        j["f_files"]    = stvfs.f_files;
+        j["f_ffree"]    = stvfs.f_ffree;
+        j["f_favail"]   = stvfs.f_favail;
+        j["f_fsid"]     = stvfs.f_fsid;
+        j["f_flag"]     = stvfs.f_flag;
+        j["f_namemax"]  = stvfs.f_namemax;
+    }
+
+    std::string response = j.dump();
+    this->sendResponse(response, nc, hm);
+}
+void Httpd::fs_readdir(struct mg_connection *nc, struct http_message *hm){
+    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+    std::string path = j["path"];
+    boost::filesystem::path p(path);
+
+    Springy::FsOps::Abstract::MetaRequest meta = this->getMetaFromJson(j);
+
+    j.clear();
+    std::unordered_map<std::string, struct stat> directories;
+    std::unordered_map<std::string, struct stat>::iterator dit;
+    nlohmann::json jdirectories;
+    j["errno"] = this->operations->readdir(meta, p, directories);
+    if(j["errno"]==0){
+        for(dit = directories.begin();dit!=directories.end();dit++){
+            nlohmann::json entry;
+            entry["st_dev"]     = dit->second.st_dev;
+            entry["st_ino"]     = dit->second.st_ino;
+            entry["st_mode"]    = dit->second.st_mode;
+            entry["st_nlink"]   = dit->second.st_nlink;
+            entry["st_uid"]     = dit->second.st_uid;
+            entry["st_gid"]     = dit->second.st_gid;
+            entry["st_rdev"]    = dit->second.st_rdev;
+            entry["st_size"]    = dit->second.st_size;
+            entry["st_blksize"] = dit->second.st_blksize;
+            entry["st_blocks"]  = dit->second.st_blocks;
+            entry["st_atime"]   = dit->second.st_atime;
+            entry["st_mtime"]   = dit->second.st_mtime;
+            entry["st_ctime"]   = dit->second.st_ctime;
+            entry["path"]       = dit->first;
+
+            jdirectories.push_back(entry);
+        }
+        j["directories"] = jdirectories;
+    }
+
+    std::string response = j.dump();
+    this->sendResponse(response, nc, hm);
+}
+void Httpd::fs_readlink(struct mg_connection *nc, struct http_message *hm){
+    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+    std::string path = j["path"];
+    boost::filesystem::path p(path);
+
+    Springy::FsOps::Abstract::MetaRequest meta = this->getMetaFromJson(j);
+
+    char buffer[2048];
+    this->libc->memset(__LINE__, buffer, '\0', sizeof(buffer));
+    j.clear();
+    j["errno"] = this->operations->readlink(meta, p, buffer, sizeof(buffer));
+    if(j["errno"]==0){
+        j["link"] = std::string(buffer);
+    }
+
+    std::string response = j.dump();
+    this->sendResponse(response, nc, hm);
+}
+void Httpd::fs_access(struct mg_connection *nc, struct http_message *hm){
+    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+    std::string path = j["path"];
+    boost::filesystem::path p(path);
+    int mode = j["mode"];
+
+    Springy::FsOps::Abstract::MetaRequest meta = this->getMetaFromJson(j);
+
+    j.clear();
+    j["errno"] = this->operations->access(meta, p, mode);
+
+    std::string response = j.dump();
+    this->sendResponse(response, nc, hm);
+}
+void Httpd::fs_mkdir(struct mg_connection *nc, struct http_message *hm){
+    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+    std::string path = j["path"];
+    boost::filesystem::path p(path);
+    int mode = j["mode"];
+
+    Springy::FsOps::Abstract::MetaRequest meta = this->getMetaFromJson(j);
+
+    j.clear();
+    j["errno"] = this->operations->mkdir(meta, p, mode);
+
+    std::string response = j.dump();
+    this->sendResponse(response, nc, hm);
+}
+void Httpd::fs_rmdir(struct mg_connection *nc, struct http_message *hm){
+    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+    std::string path = j["path"];
+    boost::filesystem::path p(path);
+
+    Springy::FsOps::Abstract::MetaRequest meta = this->getMetaFromJson(j);
+
+    j.clear();
+    j["errno"] = this->operations->rmdir(meta, p);
+
+    std::string response = j.dump();
+    this->sendResponse(response, nc, hm);
+}
+void Httpd::fs_unlink(struct mg_connection *nc, struct http_message *hm){
+    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+    std::string path = j["path"];
+    boost::filesystem::path p(path);
+
+    Springy::FsOps::Abstract::MetaRequest meta = this->getMetaFromJson(j);
+
+    j.clear();
+    j["errno"] = this->operations->unlink(meta, p);
+
+    std::string response = j.dump();
+    this->sendResponse(response, nc, hm);
+}
+void Httpd::fs_rename(struct mg_connection *nc, struct http_message *hm){
+    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+    std::string sfrom = j["old"];
+    std::string sto   = j["new"];
+    boost::filesystem::path from(sfrom);
+    boost::filesystem::path to(sto);
+
+    Springy::FsOps::Abstract::MetaRequest meta = this->getMetaFromJson(j);
+
+    j.clear();
+    j["errno"] = this->operations->rename(meta, from, to);
+
+    std::string response = j.dump();
+    this->sendResponse(response, nc, hm);
+}
+void Httpd::fs_utimens(struct mg_connection *nc, struct http_message *hm){
+    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+    std::string path = j["path"];
+    boost::filesystem::path p(path);
+
+    Springy::FsOps::Abstract::MetaRequest meta = this->getMetaFromJson(j);
+
+    struct timespec times[2];
+    times[0].tv_sec  = j["times"][0]["tv_sec"];
+    times[0].tv_nsec = j["times"][0]["tv_nsec"];
+    times[1].tv_sec  = j["times"][1]["tv_sec"];
+    times[1].tv_nsec = j["times"][1]["tv_nsec"];
+
+    j.clear();
+    j["errno"] = this->operations->utimens(meta, p, times);
+
+    std::string response = j.dump();
+    this->sendResponse(response, nc, hm);
+}
+void Httpd::fs_chmod(struct mg_connection *nc, struct http_message *hm){
+    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+    std::string path = j["path"];
+    boost::filesystem::path p(path);
+    int mode = j["mode"];
+
+    Springy::FsOps::Abstract::MetaRequest meta = this->getMetaFromJson(j);
+
+    j.clear();
+    j["errno"] = this->operations->chmod(meta, p, mode);
+
+    std::string response = j.dump();
+    this->sendResponse(response, nc, hm);
+}
+void Httpd::fs_chown(struct mg_connection *nc, struct http_message *hm){
+    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+    std::string path = j["path"];
+    boost::filesystem::path p(path);
+    uid_t u = j["owner"];
+    gid_t g = j["group"];
+
+    Springy::FsOps::Abstract::MetaRequest meta = this->getMetaFromJson(j);
+
+    j.clear();
+    j["errno"] = this->operations->chown(meta, p, u, g);
+
+    std::string response = j.dump();
+    this->sendResponse(response, nc, hm);
+}
+void Httpd::fs_symlink(struct mg_connection *nc, struct http_message *hm){
+    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+    std::string sfrom = j["old"];
+    std::string sto   = j["new"];
+    boost::filesystem::path from(sfrom);
+    boost::filesystem::path to(sto);
+
+    Springy::FsOps::Abstract::MetaRequest meta = this->getMetaFromJson(j);
+
+    j.clear();
+    j["errno"] = this->operations->symlink(meta, from, to);
+
+    std::string response = j.dump();
+    this->sendResponse(response, nc, hm);
+}
+void Httpd::fs_link(struct mg_connection *nc, struct http_message *hm){
+    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+    std::string path = j["path"];
+    boost::filesystem::path p(path);
+    std::string sfrom = j["old"];
+    std::string sto   = j["new"];
+
+    Springy::FsOps::Abstract::MetaRequest meta = this->getMetaFromJson(j);
+
+    j.clear();
+    boost::filesystem::path from(sfrom);
+    boost::filesystem::path to(sto);
+    j["errno"] = this->operations->link(meta, from, to);
+
+    std::string response = j.dump();
+    this->sendResponse(response, nc, hm);
+}
+void Httpd::fs_mknod(struct mg_connection *nc, struct http_message *hm){
+    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+    std::string path = j["path"];
+    boost::filesystem::path p(path);
+    int mode  = j["mode"];
+    dev_t dev = j["dev"];
+
+    Springy::FsOps::Abstract::MetaRequest meta = this->getMetaFromJson(j);
+
+    j.clear();
+    j["errno"] = this->operations->mknod(meta, p, mode, dev);
+
+    std::string response = j.dump();
+    this->sendResponse(response, nc, hm);
+}
+void Httpd::fs_setxattr(struct mg_connection *nc, struct http_message *hm){
+    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+    std::string path = j["path"];
+    boost::filesystem::path p(path);
+    std::string attrname  = j["xattr"];
+    std::string value = ::Springy::Util::String::decode64(j["value"]);
+    int flags = j["flags"];
+
+    Springy::FsOps::Abstract::MetaRequest meta = this->getMetaFromJson(j);
+
+    j.clear();
+    j["errno"] = this->operations->setxattr(meta, p, attrname, value.data(), value.size(), flags);
+
+    std::string response = j.dump();
+    this->sendResponse(response, nc, hm);
+}
+void Httpd::fs_getxattr(struct mg_connection *nc, struct http_message *hm){
+    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+    std::string path = j["path"];
+    boost::filesystem::path p(path);
+    std::string attrname  = j["xattr"];
+
+    Springy::FsOps::Abstract::MetaRequest meta = this->getMetaFromJson(j);
+
+    j.clear();
+
+    std::vector<char> buffer;
+    int size = this->operations->getxattr(meta, p, attrname, NULL, 0);
+    if(size > 0){
+        buffer.resize(size+1);
+        buffer[size] = '\0';
+        size = this->operations->getxattr(meta, p, attrname, &buffer[0], size+1);
+    }
+    j["errno"] = size;
+    if(size > 0){
+        std::string value = std::string(&buffer[0], size);
+        j["xattr"] = ::Springy::Util::String::encode64(value);
+    }
+
+    std::string response = j.dump();
+    this->sendResponse(response, nc, hm);
+}
+void Httpd::fs_listxattr(struct mg_connection *nc, struct http_message *hm){
+    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+    std::string path = j["path"];
+    boost::filesystem::path p(path);
+
+    Springy::FsOps::Abstract::MetaRequest meta = this->getMetaFromJson(j);
+
+    j.clear();
+
+    std::vector<char> buffer;
+    int size = this->operations->listxattr(meta, p, NULL, 0);
+    if(size > 0){
+        buffer.resize(size+1);
+        buffer[size] = '\0';
+        size = this->operations->listxattr(meta, p, &buffer[0], size+1);
+    }
+    j["errno"] = size;
+    if(size > 0){
+        nlohmann::json jxattrs;
+        std::string value;
+        for(size_t i=0;i<buffer.size();i++){
+            char ch = buffer[i];
+            if(ch == '\0' && value.size()>0){
+                value = ::Springy::Util::String::encode64(value);
+                jxattrs.push_back(value);
+                value = std::string();
+                continue;
+            }
+            value.push_back(ch);
+        }
+        if(value.size()>0){
+            value = ::Springy::Util::String::encode64(value);
+            jxattrs.push_back(value);
+        }
+        j["xattrs"] = jxattrs;
+    }
+
+    std::string response = j.dump();
+    this->sendResponse(response, nc, hm);
+}
+void Httpd::fs_removexattr(struct mg_connection *nc, struct http_message *hm){
+    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+    std::string path = j["path"];
+    boost::filesystem::path p(path);
+
+    Springy::FsOps::Abstract::MetaRequest meta = this->getMetaFromJson(j);
+
+    j.clear();
+    std::string attrname  = j["xattr"];
+    j["errno"] = this->operations->link(meta, p, attrname);
+
+    std::string response = j.dump();
+    this->sendResponse(response, nc, hm);
+}
+
+void Httpd::fs_truncate(struct mg_connection *nc, struct http_message *hm){
+    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+    std::string path = j["path"];
+    boost::filesystem::path p(path);
+
+    // call getattr
+    Springy::FsOps::Abstract::MetaRequest meta = this->getMetaFromJson(j);
+
+    size_t size = j.value("size", -1);
+    int fd = j.value("fd", -1);
+
+    j.clear();
+
+    if(fd >= 0){
+        j["errno"] = this->operations->truncate(meta, p, size);
+    }
+    else{
+        struct ::fuse_file_info fi;
+        fi.fh = fd;
+        j["errno"] = this->operations->ftruncate(meta, p, size, &fi);
+    }
+
+    std::string response = j.dump();
+    this->sendResponse(response, nc, hm);
+}
+
+void Httpd::fs_create(struct mg_connection *nc, struct http_message *hm){}
+void Httpd::fs_open(struct mg_connection *nc, struct http_message *hm){}
+void Httpd::fs_release(struct mg_connection *nc, struct http_message *hm){}
+void Httpd::fs_read(struct mg_connection *nc, struct http_message *hm){}
+void Httpd::fs_write(struct mg_connection *nc, struct http_message *hm){}
+void Httpd::fs_fsync(struct mg_connection *nc, struct http_message *hm){}
+
 
 ///////////////////////////////////
 
