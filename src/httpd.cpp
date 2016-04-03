@@ -245,8 +245,7 @@ void Httpd::list_directory(struct mg_connection *nc, struct http_message *hm){
 
 ///// VOLUME API //////
 
-void Httpd::fs_getattr(struct mg_connection *nc, struct http_message *hm){
-    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+nlohmann::json Httpd::fs_getattr(std::string remotehost, nlohmann::json j){
     std::string path = j["path"];
     boost::filesystem::path p(path);
 
@@ -271,12 +270,10 @@ void Httpd::fs_getattr(struct mg_connection *nc, struct http_message *hm){
         j["st_ctime"]   = st.st_ctime;
     }
 
-    std::string response = j.dump();
-    this->sendResponse(response, nc, hm);
+    return j;
 }
 
-void Httpd::fs_statfs(struct mg_connection *nc, struct http_message *hm){
-    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+nlohmann::json Httpd::fs_statfs(std::string remotehost, nlohmann::json j){
     std::string path = j["path"];
     boost::filesystem::path p(path);
 
@@ -299,11 +296,9 @@ void Httpd::fs_statfs(struct mg_connection *nc, struct http_message *hm){
         j["f_namemax"]  = stvfs.f_namemax;
     }
 
-    std::string response = j.dump();
-    this->sendResponse(response, nc, hm);
+    return j;
 }
-void Httpd::fs_readdir(struct mg_connection *nc, struct http_message *hm){
-    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+nlohmann::json Httpd::fs_readdir(std::string remotehost, nlohmann::json j){
     std::string path = j["path"];
     boost::filesystem::path p(path);
 
@@ -337,11 +332,9 @@ void Httpd::fs_readdir(struct mg_connection *nc, struct http_message *hm){
         j["directories"] = jdirectories;
     }
 
-    std::string response = j.dump();
-    this->sendResponse(response, nc, hm);
+    return j;
 }
-void Httpd::fs_readlink(struct mg_connection *nc, struct http_message *hm){
-    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+nlohmann::json Httpd::fs_readlink(std::string remotehost, nlohmann::json j){
     std::string path = j["path"];
     boost::filesystem::path p(path);
 
@@ -355,11 +348,9 @@ void Httpd::fs_readlink(struct mg_connection *nc, struct http_message *hm){
         j["link"] = std::string(buffer);
     }
 
-    std::string response = j.dump();
-    this->sendResponse(response, nc, hm);
+    return j;
 }
-void Httpd::fs_access(struct mg_connection *nc, struct http_message *hm){
-    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+nlohmann::json Httpd::fs_access(std::string remotehost, nlohmann::json j){
     std::string path = j["path"];
     boost::filesystem::path p(path);
     int mode = j["mode"];
@@ -369,11 +360,9 @@ void Httpd::fs_access(struct mg_connection *nc, struct http_message *hm){
     j.clear();
     j["errno"] = this->operations->access(meta, p, mode);
 
-    std::string response = j.dump();
-    this->sendResponse(response, nc, hm);
+    return j;
 }
-void Httpd::fs_mkdir(struct mg_connection *nc, struct http_message *hm){
-    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+nlohmann::json Httpd::fs_mkdir(std::string remotehost, nlohmann::json j){
     std::string path = j["path"];
     boost::filesystem::path p(path);
     int mode = j["mode"];
@@ -383,11 +372,9 @@ void Httpd::fs_mkdir(struct mg_connection *nc, struct http_message *hm){
     j.clear();
     j["errno"] = this->operations->mkdir(meta, p, mode);
 
-    std::string response = j.dump();
-    this->sendResponse(response, nc, hm);
+    return j;
 }
-void Httpd::fs_rmdir(struct mg_connection *nc, struct http_message *hm){
-    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+nlohmann::json Httpd::fs_rmdir(std::string remotehost, nlohmann::json j){
     std::string path = j["path"];
     boost::filesystem::path p(path);
 
@@ -396,11 +383,9 @@ void Httpd::fs_rmdir(struct mg_connection *nc, struct http_message *hm){
     j.clear();
     j["errno"] = this->operations->rmdir(meta, p);
 
-    std::string response = j.dump();
-    this->sendResponse(response, nc, hm);
+    return j;
 }
-void Httpd::fs_unlink(struct mg_connection *nc, struct http_message *hm){
-    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+nlohmann::json Httpd::fs_unlink(std::string remotehost, nlohmann::json j){
     std::string path = j["path"];
     boost::filesystem::path p(path);
 
@@ -409,11 +394,9 @@ void Httpd::fs_unlink(struct mg_connection *nc, struct http_message *hm){
     j.clear();
     j["errno"] = this->operations->unlink(meta, p);
 
-    std::string response = j.dump();
-    this->sendResponse(response, nc, hm);
+    return j;
 }
-void Httpd::fs_rename(struct mg_connection *nc, struct http_message *hm){
-    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+nlohmann::json Httpd::fs_rename(std::string remotehost, nlohmann::json j){
     std::string sfrom = j["old"];
     std::string sto   = j["new"];
     boost::filesystem::path from(sfrom);
@@ -424,11 +407,9 @@ void Httpd::fs_rename(struct mg_connection *nc, struct http_message *hm){
     j.clear();
     j["errno"] = this->operations->rename(meta, from, to);
 
-    std::string response = j.dump();
-    this->sendResponse(response, nc, hm);
+    return j;
 }
-void Httpd::fs_utimens(struct mg_connection *nc, struct http_message *hm){
-    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+nlohmann::json Httpd::fs_utimens(std::string remotehost, nlohmann::json j){
     std::string path = j["path"];
     boost::filesystem::path p(path);
 
@@ -443,11 +424,9 @@ void Httpd::fs_utimens(struct mg_connection *nc, struct http_message *hm){
     j.clear();
     j["errno"] = this->operations->utimens(meta, p, times);
 
-    std::string response = j.dump();
-    this->sendResponse(response, nc, hm);
+    return j;
 }
-void Httpd::fs_chmod(struct mg_connection *nc, struct http_message *hm){
-    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+nlohmann::json Httpd::fs_chmod(std::string remotehost, nlohmann::json j){
     std::string path = j["path"];
     boost::filesystem::path p(path);
     int mode = j["mode"];
@@ -457,11 +436,9 @@ void Httpd::fs_chmod(struct mg_connection *nc, struct http_message *hm){
     j.clear();
     j["errno"] = this->operations->chmod(meta, p, mode);
 
-    std::string response = j.dump();
-    this->sendResponse(response, nc, hm);
+    return j;
 }
-void Httpd::fs_chown(struct mg_connection *nc, struct http_message *hm){
-    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+nlohmann::json Httpd::fs_chown(std::string remotehost, nlohmann::json j){
     std::string path = j["path"];
     boost::filesystem::path p(path);
     uid_t u = j["owner"];
@@ -472,11 +449,9 @@ void Httpd::fs_chown(struct mg_connection *nc, struct http_message *hm){
     j.clear();
     j["errno"] = this->operations->chown(meta, p, u, g);
 
-    std::string response = j.dump();
-    this->sendResponse(response, nc, hm);
+    return j;
 }
-void Httpd::fs_symlink(struct mg_connection *nc, struct http_message *hm){
-    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+nlohmann::json Httpd::fs_symlink(std::string remotehost, nlohmann::json j){
     std::string sfrom = j["old"];
     std::string sto   = j["new"];
     boost::filesystem::path from(sfrom);
@@ -487,11 +462,9 @@ void Httpd::fs_symlink(struct mg_connection *nc, struct http_message *hm){
     j.clear();
     j["errno"] = this->operations->symlink(meta, from, to);
 
-    std::string response = j.dump();
-    this->sendResponse(response, nc, hm);
+    return j;
 }
-void Httpd::fs_link(struct mg_connection *nc, struct http_message *hm){
-    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+nlohmann::json Httpd::fs_link(std::string remotehost, nlohmann::json j){
     std::string path = j["path"];
     boost::filesystem::path p(path);
     std::string sfrom = j["old"];
@@ -504,11 +477,9 @@ void Httpd::fs_link(struct mg_connection *nc, struct http_message *hm){
     boost::filesystem::path to(sto);
     j["errno"] = this->operations->link(meta, from, to);
 
-    std::string response = j.dump();
-    this->sendResponse(response, nc, hm);
+    return j;
 }
-void Httpd::fs_mknod(struct mg_connection *nc, struct http_message *hm){
-    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+nlohmann::json Httpd::fs_mknod(std::string remotehost, nlohmann::json j){
     std::string path = j["path"];
     boost::filesystem::path p(path);
     int mode  = j["mode"];
@@ -519,11 +490,9 @@ void Httpd::fs_mknod(struct mg_connection *nc, struct http_message *hm){
     j.clear();
     j["errno"] = this->operations->mknod(meta, p, mode, dev);
 
-    std::string response = j.dump();
-    this->sendResponse(response, nc, hm);
+    return j;
 }
-void Httpd::fs_setxattr(struct mg_connection *nc, struct http_message *hm){
-    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+nlohmann::json Httpd::fs_setxattr(std::string remotehost, nlohmann::json j){
     std::string path = j["path"];
     boost::filesystem::path p(path);
     std::string attrname  = j["xattr"];
@@ -535,11 +504,9 @@ void Httpd::fs_setxattr(struct mg_connection *nc, struct http_message *hm){
     j.clear();
     j["errno"] = this->operations->setxattr(meta, p, attrname, value.data(), value.size(), flags);
 
-    std::string response = j.dump();
-    this->sendResponse(response, nc, hm);
+    return j;
 }
-void Httpd::fs_getxattr(struct mg_connection *nc, struct http_message *hm){
-    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+nlohmann::json Httpd::fs_getxattr(std::string remotehost, nlohmann::json j){
     std::string path = j["path"];
     boost::filesystem::path p(path);
     std::string attrname  = j["xattr"];
@@ -561,11 +528,9 @@ void Httpd::fs_getxattr(struct mg_connection *nc, struct http_message *hm){
         j["xattr"] = ::Springy::Util::String::encode64(value);
     }
 
-    std::string response = j.dump();
-    this->sendResponse(response, nc, hm);
+    return j;
 }
-void Httpd::fs_listxattr(struct mg_connection *nc, struct http_message *hm){
-    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+nlohmann::json Httpd::fs_listxattr(std::string remotehost, nlohmann::json j){
     std::string path = j["path"];
     boost::filesystem::path p(path);
 
@@ -601,11 +566,9 @@ void Httpd::fs_listxattr(struct mg_connection *nc, struct http_message *hm){
         j["xattrs"] = jxattrs;
     }
 
-    std::string response = j.dump();
-    this->sendResponse(response, nc, hm);
+    return j;
 }
-void Httpd::fs_removexattr(struct mg_connection *nc, struct http_message *hm){
-    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+nlohmann::json Httpd::fs_removexattr(std::string remotehost, nlohmann::json j){
     std::string path = j["path"];
     boost::filesystem::path p(path);
     std::string attrname  = j["xattr"];
@@ -615,12 +578,10 @@ void Httpd::fs_removexattr(struct mg_connection *nc, struct http_message *hm){
     j.clear();
     j["errno"] = this->operations->link(meta, p, attrname);
 
-    std::string response = j.dump();
-    this->sendResponse(response, nc, hm);
+    return j;
 }
 
-void Httpd::fs_truncate(struct mg_connection *nc, struct http_message *hm){
-    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+nlohmann::json Httpd::fs_truncate(std::string remotehost, nlohmann::json j){
     std::string path = j["path"];
     boost::filesystem::path p(path);
 
@@ -641,12 +602,10 @@ void Httpd::fs_truncate(struct mg_connection *nc, struct http_message *hm){
         j["errno"] = this->operations->ftruncate(meta, p, size, &fi);
     }
 
-    std::string response = j.dump();
-    this->sendResponse(response, nc, hm);
+    return j;
 }
 
-void Httpd::fs_create(struct mg_connection *nc, struct http_message *hm){
-    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+nlohmann::json Httpd::fs_create(std::string remotehost, nlohmann::json j){
     std::string path = j["path"];
     boost::filesystem::path p(path);
     int flags   = j["flags"];
@@ -664,19 +623,13 @@ void Httpd::fs_create(struct mg_connection *nc, struct http_message *hm){
     else{
         j["errno"] = 0;
         j["fd"] = fd;
-        
-        char buf[64];
-        mg_conn_addr_to_str(nc, buf, sizeof(buf), MG_SOCK_STRINGIFY_REMOTE|MG_SOCK_STRINGIFY_IP|MG_SOCK_STRINGIFY_PORT);
-        std::string remoteHost(buf);
 
-        this->mapRemoteHostToFD.insert(std::make_pair(remoteHost, fd));
+        this->mapRemoteHostToFD.insert(std::make_pair(remotehost, fd));
     }
 
-    std::string response = j.dump();
-    this->sendResponse(response, nc, hm);
+    return j;
 }
-void Httpd::fs_open(struct mg_connection *nc, struct http_message *hm){
-    nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+nlohmann::json Httpd::fs_open(std::string remotehost, nlohmann::json j){
     std::string path = j["path"];
     boost::filesystem::path p(path);
     int flags   = j["flags"];
@@ -694,21 +647,17 @@ void Httpd::fs_open(struct mg_connection *nc, struct http_message *hm){
         j["errno"] = 0;
         j["fd"] = fd;
         
-        char buf[64];
-        mg_conn_addr_to_str(nc, buf, sizeof(buf), MG_SOCK_STRINGIFY_REMOTE|MG_SOCK_STRINGIFY_IP|MG_SOCK_STRINGIFY_PORT);
-        std::string remoteHost(buf);
-
-        this->mapRemoteHostToFD.insert(std::make_pair(remoteHost, fd));
+        this->mapRemoteHostToFD.insert(std::make_pair(remotehost, fd));
     }
 
-    std::string response = j.dump();
-    this->sendResponse(response, nc, hm);
+    return j;
 }
-void Httpd::fs_release(struct mg_connection *nc, struct http_message *hm){
+nlohmann::json Httpd::fs_release(std::string remotehost, nlohmann::json j){
+    return j;
 }
-void Httpd::fs_read(struct mg_connection *nc, struct http_message *hm){}
-void Httpd::fs_write(struct mg_connection *nc, struct http_message *hm){}
-void Httpd::fs_fsync(struct mg_connection *nc, struct http_message *hm){}
+nlohmann::json Httpd::fs_read(std::string remotehost, nlohmann::json j){ return j; }
+nlohmann::json Httpd::fs_write(std::string remotehost, nlohmann::json j){ return j; }
+nlohmann::json Httpd::fs_fsync(std::string remotehost, nlohmann::json j){ return j; }
 
 
 ///////////////////////////////////
@@ -726,11 +675,22 @@ void Httpd::ev_handler(struct mg_connection *nc, int ev, void *ev_data) {
     // maybe alternative: https://mongoose.googlecode.com/svn/trunk/examples/example.c
     // e.g. mg_set_uri_callback(ctx, "/api/fs/getattr", &show_post, NULL);
     Httpd *instance = (Httpd*)nc->user_data;
-    struct http_message *hm = (struct http_message *) ev_data;
+
+    char buf[64];
+    mg_conn_addr_to_str(nc, buf, sizeof(buf), MG_SOCK_STRINGIFY_REMOTE|MG_SOCK_STRINGIFY_IP|MG_SOCK_STRINGIFY_PORT);
+    std::string remotehost(buf);
 
     switch (ev) {
+        case MG_EV_WEBSOCKET_FRAME:
+        {
+            //struct websocket_message *wm = (struct websocket_message *) ev_data;
+            
+        }
+        break;
         case MG_EV_HTTP_REQUEST:
         {
+            struct http_message *hm = (struct http_message *) ev_data;
+
             std::string method(hm->method.p, hm->method.len);
             if(method == "OPTIONS"){
                 struct mg_str *acrh = mg_get_http_header(hm, "Access-Control-Request-Headers");
@@ -749,51 +709,66 @@ void Httpd::ev_handler(struct mg_connection *nc, int ev, void *ev_data) {
                 break;
             }
 
-            if (mg_vcmp(&hm->uri, "/api/addDirectory") == 0) {
+            std::string uri(hm->uri.p, hm->uri.len);
+            
+            bool handled = true;
+
+            if (uri == "/api/addDirectory") {
                 instance->handle_directory(1, nc, hm);
-            } else if (mg_vcmp(&hm->uri, "/api/remDirectory") == 0) {
+            } else if (uri == "/api/remDirectory") {
                 instance->handle_directory(0, nc, hm);
-            } else if (mg_vcmp(&hm->uri, "/api/listDirectory") == 0) {
+            } else if (uri == "/api/listDirectory") {
                 instance->list_directory(nc, hm);
-            } else if(mg_vcmp(&hm->uri, "/api/fs/getattr") == 0){
-                instance->fs_getattr(nc, hm);
-            } else if(mg_vcmp(&hm->uri, "/api/fs/statfs") == 0){
-                instance->fs_statfs(nc, hm);
-            } else if(mg_vcmp(&hm->uri, "/api/fs/readdir") == 0){
-                instance->fs_readdir(nc, hm);
-            } else if(mg_vcmp(&hm->uri, "/api/fs/readlink") == 0){
-                instance->fs_readlink(nc, hm);
-            } else if(mg_vcmp(&hm->uri, "/api/fs/access") == 0){
-                instance->fs_access(nc, hm);
-            } else if(mg_vcmp(&hm->uri, "/api/fs/mkdir") == 0){
-                instance->fs_mkdir(nc, hm);
-            } else if(mg_vcmp(&hm->uri, "/api/fs/rmdir") == 0){
-                instance->fs_rmdir(nc, hm);
-            } else if(mg_vcmp(&hm->uri, "/api/fs/unlink") == 0){
-                instance->fs_unlink(nc, hm);
-            } else if(mg_vcmp(&hm->uri, "/api/fs/rename") == 0){
-                instance->fs_rename(nc, hm);
-            } else if(mg_vcmp(&hm->uri, "/api/fs/utimens") == 0){
-                instance->fs_utimens(nc, hm);
-            } else if(mg_vcmp(&hm->uri, "/api/fs/chmod") == 0){
-                instance->fs_chmod(nc, hm);
-            } else if(mg_vcmp(&hm->uri, "/api/fs/chown") == 0){
-                instance->fs_chown(nc, hm);
-            } else if(mg_vcmp(&hm->uri, "/api/fs/symlink") == 0){
-                instance->fs_symlink(nc, hm);
-            } else if(mg_vcmp(&hm->uri, "/api/fs/link") == 0){
-                instance->fs_link(nc, hm);
-            } else if(mg_vcmp(&hm->uri, "/api/fs/mknod") == 0){
-                instance->fs_mknod(nc, hm);
-            } else if(mg_vcmp(&hm->uri, "/api/fs/setxattr") == 0){
-                instance->fs_setxattr(nc, hm);
-            } else if(mg_vcmp(&hm->uri, "/api/fs/getxattr") == 0){
-                instance->fs_getxattr(nc, hm);
-            } else if(mg_vcmp(&hm->uri, "/api/fs/listxattr") == 0){
-                instance->fs_listxattr(nc, hm);
-            } else if(mg_vcmp(&hm->uri, "/api/fs/removexattr") == 0){
-                instance->fs_removexattr(nc, hm);
-            } else {
+            } else{
+                nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
+
+                if(uri == "/api/fs/getattr"){
+                    j = instance->fs_getattr(remotehost, j);
+                } else if(uri == "/api/fs/statfs"){
+                    j = instance->fs_statfs(remotehost, j);
+                } else if(uri == "/api/fs/readdir"){
+                    j = instance->fs_readdir(remotehost, j);
+                } else if(uri == "/api/fs/readlink"){
+                    j = instance->fs_readlink(remotehost, j);
+                } else if(uri == "/api/fs/access"){
+                    j = instance->fs_access(remotehost, j);
+                } else if(uri == "/api/fs/mkdir"){
+                    j = instance->fs_mkdir(remotehost, j);
+                } else if(uri == "/api/fs/rmdir"){
+                    j = instance->fs_rmdir(remotehost, j);
+                } else if(uri == "/api/fs/unlink"){
+                    j = instance->fs_unlink(remotehost, j);
+                } else if(uri == "/api/fs/rename"){
+                    j = instance->fs_rename(remotehost, j);
+                } else if(uri == "/api/fs/utimens"){
+                    j = instance->fs_utimens(remotehost, j);
+                } else if(uri == "/api/fs/chmod"){
+                    j = instance->fs_chmod(remotehost, j);
+                } else if(uri == "/api/fs/chown"){
+                    j = instance->fs_chown(remotehost, j);
+                } else if(uri == "/api/fs/symlink"){
+                    j = instance->fs_symlink(remotehost, j);
+                } else if(uri == "/api/fs/link"){
+                    j = instance->fs_link(remotehost, j);
+                } else if(uri == "/api/fs/mknod"){
+                    j = instance->fs_mknod(remotehost, j);
+                } else if(uri == "/api/fs/setxattr"){
+                    j = instance->fs_setxattr(remotehost, j);
+                } else if(uri == "/api/fs/getxattr"){
+                    j = instance->fs_getxattr(remotehost, j);
+                } else if(uri == "/api/fs/listxattr"){
+                    j = instance->fs_listxattr(remotehost, j);
+                } else if(uri == "/api/fs/removexattr"){
+                    j = instance->fs_removexattr(remotehost, j);
+                } else {
+                    handled = false;
+                }
+                if(handled){
+                    instance->sendResponse(std::string(j.dump()), nc, hm);
+                }
+            }
+            
+            if(!handled){
                 instance->handle_invalid_request(nc, hm);
             }
         }
