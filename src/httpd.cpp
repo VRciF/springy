@@ -671,6 +671,52 @@ void Httpd::handle_invalid_request(struct mg_connection *nc, struct http_message
     this->sendResponse(response, nc, hm);
 }
 
+nlohmann::json Httpd::routeRequest(std::string uri, std::string remotehost, nlohmann::json j){
+    if(uri == "/api/fs/getattr"){
+        j = this->fs_getattr(remotehost, j);
+    } else if(uri == "/api/fs/statfs"){
+        j = this->fs_statfs(remotehost, j);
+    } else if(uri == "/api/fs/readdir"){
+        j = this->fs_readdir(remotehost, j);
+    } else if(uri == "/api/fs/readlink"){
+        j = this->fs_readlink(remotehost, j);
+    } else if(uri == "/api/fs/access"){
+        j = this->fs_access(remotehost, j);
+    } else if(uri == "/api/fs/mkdir"){
+        j = this->fs_mkdir(remotehost, j);
+    } else if(uri == "/api/fs/rmdir"){
+        j = this->fs_rmdir(remotehost, j);
+    } else if(uri == "/api/fs/unlink"){
+        j = this->fs_unlink(remotehost, j);
+    } else if(uri == "/api/fs/rename"){
+        j = this->fs_rename(remotehost, j);
+    } else if(uri == "/api/fs/utimens"){
+        j = this->fs_utimens(remotehost, j);
+    } else if(uri == "/api/fs/chmod"){
+        j = this->fs_chmod(remotehost, j);
+    } else if(uri == "/api/fs/chown"){
+        j = this->fs_chown(remotehost, j);
+    } else if(uri == "/api/fs/symlink"){
+        j = this->fs_symlink(remotehost, j);
+    } else if(uri == "/api/fs/link"){
+        j = this->fs_link(remotehost, j);
+    } else if(uri == "/api/fs/mknod"){
+        j = this->fs_mknod(remotehost, j);
+    } else if(uri == "/api/fs/setxattr"){
+        j = this->fs_setxattr(remotehost, j);
+    } else if(uri == "/api/fs/getxattr"){
+        j = this->fs_getxattr(remotehost, j);
+    } else if(uri == "/api/fs/listxattr"){
+        j = this->fs_listxattr(remotehost, j);
+    } else if(uri == "/api/fs/removexattr"){
+        j = this->fs_removexattr(remotehost, j);
+    } else {
+        throw Springy::Exception(__FILE__, __PRETTY_FUNCTION__, __LINE__) << "request failed";
+    }
+
+    return j;
+}
+
 void Httpd::ev_handler(struct mg_connection *nc, int ev, void *ev_data) {
     // maybe alternative: https://mongoose.googlecode.com/svn/trunk/examples/example.c
     // e.g. mg_set_uri_callback(ctx, "/api/fs/getattr", &show_post, NULL);
@@ -683,8 +729,21 @@ void Httpd::ev_handler(struct mg_connection *nc, int ev, void *ev_data) {
     switch (ev) {
         case MG_EV_WEBSOCKET_FRAME:
         {
-            //struct websocket_message *wm = (struct websocket_message *) ev_data;
-            
+            struct websocket_message *wm = (struct websocket_message *) ev_data;
+            std::string message = std::string((const char *)wm->data, wm->size);
+            nlohmann::json j = nlohmann::json::parse(message);
+
+            std::string method = j["method"];
+            try{
+                j = instance->routeRequest(method, remotehost, j);
+                
+                mg_printf_websocket_frame(nc, WEBSOCKET_OP_TEXT | WEBSOCKET_DONT_FIN, "%s", j.dump().c_str());
+            }
+            catch(Springy::Exception ex){
+                j.clear();
+                j["errno"] = -EFAULT;
+                mg_printf_websocket_frame(nc, WEBSOCKET_OP_TEXT | WEBSOCKET_DONT_FIN, "%s", j.dump().c_str());
+            }
         }
         break;
         case MG_EV_HTTP_REQUEST:
@@ -721,48 +780,14 @@ void Httpd::ev_handler(struct mg_connection *nc, int ev, void *ev_data) {
                 instance->list_directory(nc, hm);
             } else{
                 nlohmann::json j = nlohmann::json::parse(std::string(hm->body.p, hm->body.len));
-
-                if(uri == "/api/fs/getattr"){
-                    j = instance->fs_getattr(remotehost, j);
-                } else if(uri == "/api/fs/statfs"){
-                    j = instance->fs_statfs(remotehost, j);
-                } else if(uri == "/api/fs/readdir"){
-                    j = instance->fs_readdir(remotehost, j);
-                } else if(uri == "/api/fs/readlink"){
-                    j = instance->fs_readlink(remotehost, j);
-                } else if(uri == "/api/fs/access"){
-                    j = instance->fs_access(remotehost, j);
-                } else if(uri == "/api/fs/mkdir"){
-                    j = instance->fs_mkdir(remotehost, j);
-                } else if(uri == "/api/fs/rmdir"){
-                    j = instance->fs_rmdir(remotehost, j);
-                } else if(uri == "/api/fs/unlink"){
-                    j = instance->fs_unlink(remotehost, j);
-                } else if(uri == "/api/fs/rename"){
-                    j = instance->fs_rename(remotehost, j);
-                } else if(uri == "/api/fs/utimens"){
-                    j = instance->fs_utimens(remotehost, j);
-                } else if(uri == "/api/fs/chmod"){
-                    j = instance->fs_chmod(remotehost, j);
-                } else if(uri == "/api/fs/chown"){
-                    j = instance->fs_chown(remotehost, j);
-                } else if(uri == "/api/fs/symlink"){
-                    j = instance->fs_symlink(remotehost, j);
-                } else if(uri == "/api/fs/link"){
-                    j = instance->fs_link(remotehost, j);
-                } else if(uri == "/api/fs/mknod"){
-                    j = instance->fs_mknod(remotehost, j);
-                } else if(uri == "/api/fs/setxattr"){
-                    j = instance->fs_setxattr(remotehost, j);
-                } else if(uri == "/api/fs/getxattr"){
-                    j = instance->fs_getxattr(remotehost, j);
-                } else if(uri == "/api/fs/listxattr"){
-                    j = instance->fs_listxattr(remotehost, j);
-                } else if(uri == "/api/fs/removexattr"){
-                    j = instance->fs_removexattr(remotehost, j);
-                } else {
+                
+                try{
+                    j = instance->routeRequest(uri, remotehost, j);
+                }
+                catch(Springy::Exception ex){
                     handled = false;
                 }
+
                 if(handled){
                     instance->sendResponse(std::string(j.dump()), nc, hm);
                 }

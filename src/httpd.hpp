@@ -45,13 +45,14 @@ namespace Springy{
 
             void sendResponse(std::string response, struct mg_connection *nc, struct http_message *hm);
             Springy::FsOps::Abstract::MetaRequest getMetaFromJson(nlohmann::json j);
-            
+
             void closeOpenFilesByConnection(struct mg_connection *nc);
 
-        public:
             void handle_directory(int what, struct mg_connection *nc, struct http_message *hm);
             void list_directory(struct mg_connection *nc, struct http_message *hm);
-            
+
+            nlohmann::json routeRequest(std::string uri, std::string remotehost, nlohmann::json j);
+
             nlohmann::json fs_getattr(std::string remotehost, nlohmann::json j);
             nlohmann::json fs_statfs(std::string remotehost, nlohmann::json j);
             nlohmann::json fs_readdir(std::string remotehost, nlohmann::json j);
@@ -81,6 +82,8 @@ namespace Springy{
             nlohmann::json fs_fsync(std::string remotehost, nlohmann::json j);
 
             void handle_invalid_request(struct mg_connection *nc, struct http_message *hm);
+
+        public:
 
             static void ev_handler(struct mg_connection *nc, int ev, void *ev_data);
             static void* server(void *arg);
